@@ -1,0 +1,103 @@
+name: kitti_00_to_05
+seed: 2514
+device: cuda:0
+path:
+  base_dir: experiments
+  code: code
+  results: results
+  checkpoint: checkpoint
+  resume_state: null
+
+dataset:
+  common_args: &dataset_common_args
+    basedir: ./data/kitti/
+    cam_id: 2
+    meta_json: 'data_len.json'
+    skip_frame: 3
+    voxel_size: 0.15
+    pcd_sample_num: 8192
+    resize_size: [370, 1240]
+    extend_ratio: [2.5, 2.5]
+  train:
+    validation_split: 0.15
+    dataset:
+      base:
+        batch_size: &batch_size 4
+        seqs: ['00','01','02','03','04','05']
+        <<: *dataset_common_args
+      main:
+        max_deg: 15
+        max_tran: 0.1
+    dataloader:
+      common_args: &dataloader_common_args
+        num_workers: 4
+        pin_memory: true
+      args:
+        batch_size: *batch_size
+        shuffle: true
+        drop_last: true
+        <<: *dataloader_common_args
+      val_args:
+        batch_size: *batch_size
+        shuffle: false
+        drop_last: false
+        <<: *dataloader_common_args
+  test:
+    dataset:
+      base:
+        batch_size: 1
+        seqs: ['06', '07', '08']
+        <<: *dataset_common_args
+      main:
+        max_deg: 15
+        max_tran: 0.1
+    dataloader:
+      args:
+        batch_size: 1
+        shuffle: false
+        drop_last: false
+        <<: *dataloader_common_args
+model:
+  diffusion_scheduler:
+    sigma_r: 0.05
+    sigma_t: 0.03
+    args:
+      schedule_type: linear
+      n_diff_steps: 1000
+      beta_1: 1.0E-4
+      beta_T: 0.02
+  surrogate:
+    hidden_dims: [128, 128, 128, 128]
+    x_dim: 6
+    encoder_argv:
+      resnet_depth: 18
+      resnet_pretrained: pretrained/resnet18-5c106cde.pth
+      encoder_2d_chans: [64, 96, 128, 192]
+      encoder_3d_chans: [64, 96, 128, 192]
+      pcd_pyramid: [4096, 2048, 1024]
+
+loss:
+  pcd:
+    type: mae
+    args:
+      reduction: mean
+  weights:
+    pcd: 0.5
+    R: 1.0
+    t: 1.0
+
+optimizer:
+  args:
+    lr: 5.0E-4
+    betas: [0.9, 0.999]
+
+scheduler:
+  type: step
+  args:
+    step_size: 10
+    gamma: 0.5
+
+run:
+  n_epoch: 50
+  val_per_epoch: 10
+
