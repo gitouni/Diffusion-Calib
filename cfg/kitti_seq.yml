@@ -1,7 +1,7 @@
 seed: 2514
 device: cuda:0
 path:
-  name: single
+  name: kitti_seq
   base_dir: experiments/linear/
   log: log
   results: results
@@ -16,7 +16,7 @@ dataset:
     skip_frame: 1
     voxel_size: 0.15
     pcd_sample_num: 4096
-    resize_size: null
+    resize_size: [370, 1226]
     extend_ratio: [2.5, 2.5]
   train:
     dataset:
@@ -38,17 +38,18 @@ dataset:
           mag_randomly: true
     dataloader:
       common_args: &dataloader_common_args
-        num_workers: 6
+        num_workers: 8
         pin_memory: true
       args:
-        batch_sampler:
+        batch_sampler: &batch_sampler_args
           dataset_len: 128
-          num_samples: 8
+          max_images: 8
+          num_samples_per_seq: [2,4]
+          continuous: true
         <<: *dataloader_common_args
       val_args:
         batch_sampler:
-          dataset_len: 128
-          num_samples: 8
+          <<: *batch_sampler_args
         <<: *dataloader_common_args
   test:
     common_main: &test_common_main
@@ -94,6 +95,14 @@ model:
       encoder_2d_chans: [64, 96, 128, 192]
       encoder_3d_chans: [64, 96, 128, 192]
       pcd_pyramid: [2048, 1024, 512]
+    atten_argv:
+      nhead: 6
+      num_encoder_layers: 4
+      dim_feedforward: 512
+      dropout: 0.1
+      activation: relu
+      batch_first: true
+      norm_first: false
   diffuser:
     beta_schedule:
       schedule: linear
@@ -118,7 +127,7 @@ loss:
 
 optimizer:
   args:
-    lr: 5.0E-4
+    lr: 5.0E-5
     betas: [0.9, 0.999]
   max_grad: 1.0
 
@@ -126,6 +135,7 @@ scheduler:
   type: exponential
   args:
     gamma: 0.95
+
 run:
   n_epoch: 50
   val_per_epoch: 5
