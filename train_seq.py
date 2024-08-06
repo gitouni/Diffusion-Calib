@@ -6,8 +6,8 @@ import torch
 import torch.nn as nn
 import torch.utils
 from torch.utils.data import DataLoader
-from dataset import BaseKITTIDataset, PertubKITTIDataset, KITTIBatchSampler
-from models.denoiser import Surrogate, Denoiser
+from dataset import BaseKITTIDataset, PertubSeqKITTIDataset, KITTISeqBatchSampler
+from models.denoiser import SeqSurrogate, SeqDenoiser
 from models.diffuser import Diffuser
 from models.lr_scheduler import get_lr_scheduler
 from models.loss import get_loss, geodesic_loss
@@ -26,10 +26,10 @@ def get_dataloader(train_base_dataset_argv:Dict, train_dataset_argv:Dict,
         train_dataloader_argv:Dict, val_dataloader_argv:Dict):
     train_base_dataset = BaseKITTIDataset(**train_base_dataset_argv)
     val_base_dataset = BaseKITTIDataset(**val_base_dataset_argv)
-    train_dataset = PertubKITTIDataset(train_base_dataset, **train_dataset_argv)
-    val_dataset = PertubKITTIDataset(val_base_dataset, **val_dataset_argv)
-    train_dataloader_argv['batch_sampler'] = KITTIBatchSampler(len(train_base_dataset.kitti_datalist), train_base_dataset.sep, **train_dataloader_argv['batch_sampler'])
-    val_dataloader_argv['batch_sampler'] = KITTIBatchSampler(len(val_base_dataset.kitti_datalist), val_base_dataset.sep, **val_dataloader_argv['batch_sampler'])
+    train_dataset = PertubSeqKITTIDataset(train_base_dataset, **train_dataset_argv)
+    val_dataset = PertubSeqKITTIDataset(val_base_dataset, **val_dataset_argv)
+    train_dataloader_argv['batch_sampler'] = KITTISeqBatchSampler(len(train_base_dataset.kitti_datalist), train_base_dataset.sep, **train_dataloader_argv['batch_sampler'])
+    val_dataloader_argv['batch_sampler'] = KITTISeqBatchSampler(len(val_base_dataset.kitti_datalist), val_base_dataset.sep, **val_dataloader_argv['batch_sampler'])
     if hasattr(train_dataset, 'collate_fn'):
         train_dataloader_argv['collate_fn'] = getattr(train_dataset, 'collate_fn')
     if hasattr(val_dataset, 'collate_fn'):
@@ -80,8 +80,8 @@ def main(config:Dict, config_path:str):
     device = config['device']
     # torch.backends.cudnn.benchmark=True
     # torch.backends.cudnn.enabled = False
-    surrogate_model = Surrogate(**config['model']['surrogate']).to(device)
-    denoiser = Denoiser(surrogate_model)
+    surrogate_model = SeqSurrogate(**config['model']['surrogate']).to(device)
+    denoiser = SeqDenoiser(surrogate_model)
     diffuser = Diffuser(denoiser, **config['model']['diffuser'])
     dataset_argv = config['dataset']['train']
     train_dataloader, val_dataloader = get_dataloader(dataset_argv['dataset']['train']['base'], dataset_argv['dataset']['train']['main'],
@@ -167,7 +167,7 @@ def main(config:Dict, config_path:str):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', default="cfg/kitti.yml", type=str)
+    parser.add_argument('--config', default="cfg/kitti_seq.yml", type=str)
     args = parser.parse_args()
     config = yaml.load(open(args.config,'r'), yaml.SafeLoader)
     main(config, args.config)

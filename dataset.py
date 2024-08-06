@@ -1,16 +1,15 @@
 import os
 import json
 import torch
-from torch.utils.data.dataset import Dataset 
 from torchvision.transforms import transforms as Tf
 import numpy as np
 import pykitti
 import open3d as o3d
-from util import transform, se3
+from models.util import transform, se3
 from PIL import Image
 from torch import Generator, randperm
-from torch.utils.data import Dataset, Subset
-from typing import Iterable, Dict, Union, Optional, Tuple, Sequence
+from torch.utils.data import Dataset, Subset, BatchSampler
+from typing import Iterable, List, Dict, Union, Optional, Tuple, Sequence
 
 def subset_split(dataset:Dataset, lengths:Sequence[int], seed:Optional[int]=None):
 	"""
@@ -97,9 +96,8 @@ class MaxResampler:
     """ [N, D] -> [M, D] (M<=max_num)\n
     used for testing
     """
-    def __init__(self,num,seed=8080):
+    def __init__(self,num):
         self.num = num
-        np.random.seed(seed)  # fix randomly sampling in test pipline
     def __call__(self, x:np.ndarray):
         num_points = x.shape[0]
         x_ = np.random.permutation(x)
@@ -116,9 +114,62 @@ class ToTensor:
         return torch.from_numpy(x).type(self.tensor_type)
 
 
+class KITTIBatchSampler(BatchSampler):
+    def __init__(self, num_sequences:int, len_of_sequences:Sequence[int], dataset_len:int, num_samples:int=4):
+        # Batch sampler with a dynamic number of sequences
+        # max_images >= number_of_sequences * images_per_sequence
+        assert num_sequences == len(len_of_sequences)
+        self.num_samples = num_samples
+        self.num_sequences = num_sequences
+        self.len_of_sequences = len_of_sequences
+        self.dataset_len = dataset_len
+
+    def __iter__(self):
+        for _ in range(self.dataset_len):
+            # number per sequence
+            seq_idx = np.random.choice(self.num_sequences)
+            file_indices = np.random.choice(self.len_of_sequences[seq_idx], self.num_samples)
+            batches = [(seq_idx, file_idx) for file_idx in file_indices]
+            yield batches
+
+    def __len__(self):
+        return self.dataset_len
+    
+
+class KITTISeqBatchSampler(BatchSampler):
+    def __init__(self, num_sequences:int, len_of_sequences:Sequence[int], dataset_len:int, max_images:int=12,
+            num_samples_per_seq:Tuple[int,int]=(2,6), continuous:bool=True):
+        # Batch sampler with a dynamic number of sequences
+        # max_images >= number_of_sequences * images_per_sequence
+        assert num_sequences == len(len_of_sequences)
+        self.max_images = max_images
+        self.num_samples_per_seq = list(range(num_samples_per_seq[0],num_samples_per_seq[1]+1))
+        self.num_sequences = num_sequences
+        self.len_of_sequences = len_of_sequences
+        self.dataset_len = dataset_len
+        self.continuous = continuous
+
+    def __iter__(self):
+        for _ in range(self.dataset_len):
+            # number per sequence
+            num_sample = np.random.choice(self.num_samples_per_seq)
+            num_seq = self.max_images // num_sample
+            seq_idx = np.random.choice(self.num_sequences)
+            batches = []
+            for _ in range(num_seq):
+                if not self.continuous:
+                    file_indices = np.random.choice(self.len_of_sequences[seq_idx], num_sample, replace=False)
+                else:
+                    start_idx = np.random.choice(self.len_of_sequences[seq_idx] - num_sample)
+                    file_indices = np.arange(start_idx, start_idx+num_sample)
+                batches.append((seq_idx, file_indices))
+            yield batches
+
+    def __len__(self):
+        return self.dataset_len
 
 class BaseKITTIDataset(Dataset):
-    def __init__(self,basedir:str, batch_size:int,
+    def __init__(self,basedir:str,
                  seqs=['09','10'], cam_id:int=2,
                  meta_json='data_len.json', skip_frame=1,
                  voxel_size=0.15, pcd_sample_num=8192,
@@ -131,9 +182,9 @@ class BaseKITTIDataset(Dataset):
         frame_list = []
         for seq in seqs:
             frame = list(range(0,dict_len[seq],skip_frame))
-            cut_index = len(frame) % batch_size
-            if cut_index > 0:
-                frame = frame[:-cut_index]  # to be flexible to pykitti
+            # cut_index = len(frame) % batch_size
+            # if cut_index > 0:
+            #     frame = frame[:-cut_index]  # to be flexible to pykitti
             frame_list.append(frame)
         self.kitti_datalist = [pykitti.odometry(basedir,seq,frames=frame) for seq,frame in zip(seqs,frame_list)]  
         # concat images from different seq into one batch will cause error
@@ -156,6 +207,7 @@ class BaseKITTIDataset(Dataset):
         
     def __len__(self):
         return self.sumsep[-1]
+    
     @staticmethod
     def check(odom_obj:pykitti.odometry,cam_id:int,seq:str)->bool:
         calib = odom_obj.calib
@@ -166,15 +218,20 @@ class BaseKITTIDataset(Dataset):
         assert cam_files_length==velo_files_lenght, head_msg+"number of cam %d (%d) and velo files (%d) doesn't equal!"%(cam_id,cam_files_length,velo_files_lenght)
         assert hasattr(calib,'T_cam0_velo'), head_msg+"Crucial calib attribute 'T_cam0_velo' doesn't exist!"
         
-    
-    def __getitem__(self, index):
+    def __getitem__(self, index:Union[int, Tuple[int,int]]):
+        if isinstance(index, Tuple):
+            return self.group_sub_item(index)
         group_id = np.digitize(index,self.sumsep,right=False)
-        data = self.kitti_datalist[group_id]
-        T_cam2velo = getattr(data.calib,'T_cam%d_velo'%self.cam_id)     
         if group_id > 0:
             sub_index = index - self.sumsep[group_id-1]
         else:
             sub_index = index
+        return self.group_sub_item((group_id, sub_index))
+        
+    def group_sub_item(self, tuple_index:Tuple[int,int]):
+        group_idx, sub_index = tuple_index
+        data = self.kitti_datalist[group_idx]
+        T_cam2velo = getattr(data.calib,'T_cam%d_velo'%self.cam_id)  
         raw_img:Image.Image = getattr(data,'get_cam%d'%self.cam_id)(sub_index)  # PIL Image
         H,W = raw_img.height, raw_img.width
         K_cam:np.ndarray = getattr(data.calib,'K_cam%d'%self.cam_id)  
@@ -227,22 +284,71 @@ class PertubKITTIDataset(Dataset):
         self.dataset = dataset
         self.file = file
         if self.file is not None:
-            self.perturb = torch.from_numpy(np.loadtxt(self.file,dtype=np.float32,delimiter=','))[None,...]  # (1,N,6)
+            if os.path.isfile(self.file):
+                self.perturb = torch.from_numpy(np.loadtxt(self.file, dtype=np.float32))[None,...]  # (1,N,6)
+            else:
+                random_transform = transform.UniformTransformSE3(max_deg, max_tran, mag_randomly)
+                perturb = random_transform.generate_transform(len(dataset))
+                np.savetxt(self.file, perturb.cpu().detach().numpy(), fmt='%0.6f')
+                self.perturb = perturb.unsqueeze(0)  # (1,N,6)
         else:
             self.transform = transform.UniformTransformSE3(max_deg, max_tran, mag_randomly)
+
     def __len__(self):
         return len(self.dataset)
-    def __getitem__(self, index):
+    
+    def __getitem__(self, index:Union[int, Tuple[int,int]]):
         data = self.dataset[index]
+        if isinstance(index, Tuple):
+            group_idx, sub_index = index
+            total_index = self.dataset.sumsep[group_idx] + sub_index
+        else:
+            total_index = index
         calibed_pcd = data['pcd']  # (3,N)
         if self.file is None:  # randomly generate igt
             _uncalib_pcd = self.transform(calibed_pcd[None,:,:]).squeeze(0)  # (3,N)
             gt = self.transform.igt.squeeze(0)  # (4,4)
         else:
-            igt = se3.exp(self.perturb[:,index,:])  # (1,6) -> (1,4,4)
+            igt = se3.exp(self.perturb[:,total_index,:])  # (1,6) -> (1,4,4)
             _uncalib_pcd = se3.transform(igt,calibed_pcd[None,...]).squeeze(0)  # (3,N)
             gt = transform.inv_pose(igt).squeeze(0)
         new_data = dict(img=data['img'],uncalib_pcd=_uncalib_pcd, gt=gt, camera_info=data['camera_info'])
+        return new_data
+    
+    @staticmethod
+    def collate_fn(zipped_x:Iterable[Dict[str, Union[torch.Tensor, Dict]]]):
+        batch = dict()
+        batch['img'] = torch.stack([x['img'] for x in zipped_x])
+        batch['uncalib_pcd'] = torch.stack([x['uncalib_pcd'] for x in zipped_x])
+        batch['gt'] = torch.stack([x['gt'] for x in zipped_x])
+        batch['camera_info'] = zipped_x[0]['camera_info']
+        return batch
+    
+class PertubSeqKITTIDataset(Dataset):
+    def __init__(self,dataset:BaseKITTIDataset,
+                 max_deg:float,
+                 max_tran:float,
+                 mag_randomly=True,
+                 ):
+        self.dataset = dataset
+        self.transform = transform.UniformTransformSE3(max_deg, max_tran, mag_randomly)
+
+    def __len__(self):
+        return len(self.dataset)
+    
+    def __getitem__(self, index:Tuple[int, Sequence[int]]):
+        group_idx, sub_indices = index
+        igt_x = self.transform.generate_transform(1)  # (1, 6)
+        gt = se3.exp(-igt_x).squeeze(0)
+        igt = se3.exp(igt_x)
+        img = []
+        uncalib_pcd = []
+        for sub_idx in sub_indices:
+            data = self.dataset[(group_idx, sub_idx)]
+            _uncalib_pcd = se3.transform(igt, data['pcd'].unsqueeze(0))  # (1, 3, N)
+            img.append(data['img'])
+            uncalib_pcd.append(_uncalib_pcd)
+        new_data = dict(img=torch.stack(img, dim=0),uncalib_pcd=torch.cat(uncalib_pcd, dim=0), gt=gt, camera_info=data['camera_info'])
         return new_data
     
     @staticmethod
