@@ -41,11 +41,12 @@ def test_diffuser(test_loader:DataLoader, name:str, diffuser:Diffuser, logger:lo
         N_valid = len(test_loader)
         for i, batch in enumerate(test_loader):
             img = batch['img'].to(device)
-            pcd = batch['uncalib_pcd'].to(device)
+            pcd = batch['pcd'].to(device)
+            init_extran = batch['extran'].to(device)
             gt_se3 = batch['gt'].to(device)  # transform uncalibrated_pcd to calibrated_pcd
             gt_x = se3.log(gt_se3)
             camera_info = batch['camera_info']
-            x0_hat = diffuser.dpm_sampling(torch.zeros_like(gt_x), (img, pcd, camera_info))
+            x0_hat = diffuser.dpm_sampling(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info))
             x0_se3 = se3.exp(x0_hat)
             R_err, t_err = se3_err(x0_se3, gt_se3)
             if torch.isnan(R_err).sum() + torch.isnan(t_err).sum() > 0:
@@ -79,14 +80,17 @@ def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:log
         N_valid = len(test_loader)
         for i, batch in enumerate(test_loader):
             img = batch['img'].to(device)
-            pcd = batch['uncalib_pcd'].to(device)
+            pcd = batch['pcd'].to(device)
+            init_extran = batch['extran'].to(device)
             gt_se3 = batch['gt'].to(device)  # transform uncalibrated_pcd to calibrated_pcd
             camera_info = batch['camera_info']
             H0 = torch.eye(4).unsqueeze(0).to(gt_se3)
+            model.restore_buffer([img, pcd])
             for _ in range(iters):
                 pcd_tf = se3.transform(H0, pcd)
-                delta_x = model.forward(img, pcd_tf, camera_info)
+                delta_x = model.forward(img, pcd_tf, init_extran, camera_info)
                 H0 = se3.exp(delta_x) @ H0
+            model.clear_buffer()
             R_err, t_err = se3_err(H0, gt_se3)
             if torch.isnan(R_err).sum() + torch.isnan(t_err).sum() > 0:
                 logger.warn("nan value detected, skip this batch.")
@@ -138,7 +142,8 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger_mode = 'w'
-    file_handler = logging.FileHandler(str(log_dir) + '/test_{}.log'.format(model_type), mode=logger_mode)
+    steps = config['model']['diffuser']['dpm_argv']['steps'] if model_type == 'diffusion' else iters
+    file_handler = logging.FileHandler(str(log_dir) + '/test_{}_{}.log'.format(model_type, steps), mode=logger_mode)
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
@@ -173,7 +178,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default="cfg/kitti.yml", type=str)
     parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='iterative')
-    parser.add_argument("--iters",type=int,default=1)
+    parser.add_argument("--iters",type=int,default=10)
     args = parser.parse_args()
     config = yaml.load(open(args.config,'r'), yaml.SafeLoader)
     main(config, args.config, args.model_type, args.iters)

@@ -49,11 +49,12 @@ def val_epoch(val_loader:DataLoader, diffuser:Diffuser, logger:logging.Logger, d
         N_valid = len(val_loader)
         for i, batch in enumerate(val_loader):
             img = batch['img'].to(device)
-            pcd = batch['uncalib_pcd'].to(device)
+            pcd = batch['pcd'].to(device)
+            init_extran = batch['extran'].to(device)
             gt_se3 = batch['gt'].to(device)  # transform uncalibrated_pcd to calibrated_pcd
             gt_x = se3.log(gt_se3)
             camera_info = batch['camera_info']
-            x0_hat = diffuser.dpm_sampling(torch.zeros_like(gt_x), (img, pcd, camera_info))
+            x0_hat = diffuser.dpm_sampling(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info))
             x0_se3 = se3.exp(x0_hat)
             R_loss, t_loss = geodesic_loss(x0_se3, gt_se3)
             loss = diffuser.loss_fn(x0_hat, gt_x)
@@ -132,12 +133,13 @@ def main(config:Dict, config_path:str):
             for i, batch in enumerate(train_dataloader):
                 # model prediction
                 img = batch['img'].to(device)
-                pcd = batch['uncalib_pcd'].to(device)
+                pcd = batch['pcd'].to(device)
+                init_extran = batch['extran'].to(device)
                 gt_se3 = batch['gt'].to(device)  # transform uncalibrated_pcd to calibrated_pcd
                 camera_info = batch['camera_info']
                 gt_x = se3.log(gt_se3)  # (B, 6)
                 optimizer.zero_grad()
-                loss, x0_hat = diffuser.forward(gt_x, (img, pcd, camera_info))
+                loss, x0_hat = diffuser.forward(gt_x, (img, pcd, init_extran, camera_info))
                 if torch.isnan(loss).sum() > 0:
                     logger.warning("nan detected in loss, skip this batch.")
                     continue

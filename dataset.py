@@ -1,6 +1,7 @@
 import os
 import json
 import torch
+from PIL import Image
 from torchvision.transforms import transforms as Tf
 import numpy as np
 import pykitti
@@ -10,6 +11,8 @@ from PIL import Image
 from torch import Generator, randperm
 from torch.utils.data import Dataset, Subset, BatchSampler
 from typing import Iterable, List, Dict, Union, Optional, Tuple, Sequence
+from models.colmap.io import read_cameras_binary, read_images_binary, CAMERA_TYPE
+from models.tools.cmsc import nptran, CBACorr
 
 def subset_split(dataset:Dataset, lengths:Sequence[int], seed:Optional[int]=None):
 	"""
@@ -40,7 +43,7 @@ def check_length(root:str,save_name='data_len.json'):
         json.dump(dict_len,f)
         
 class KITTIFilter:
-    def __init__(self, voxel_size=0.3, concat:str='none'):
+    def __init__(self, voxel_size=0.3, min_dist:float=0.15):
         """KITTIFilter
 
         Args:
@@ -48,30 +51,17 @@ class KITTIFilter:
             concat (str, optional): concat operation for normal estimation, 'none','xyz' or 'zero-mean'. Defaults to 'none'.
         """
         self.voxel_size = voxel_size
-        self.concat = concat
+        self.min_dist = min_dist
         
     def __call__(self, x:np.ndarray):
+        rev_x = np.linalg.norm(x, axis=1) > self.min_dist
         pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(x)
+        pcd.points = o3d.utility.Vector3dVector(x[rev_x,:])
         # _, ind = pcd.remove_radius_outlier(nb_points=self.n_neighbor, radius=self.voxel_size)
         # pcd.select_by_index(ind)
         pcd = pcd.voxel_down_sample(self.voxel_size)
         pcd_xyz = np.array(pcd.points,dtype=np.float32)
-        if self.concat == 'none':
-            return pcd_xyz
-        else:
-            pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=self.voxel_size*3, max_nn=30))
-            pcd.normalize_normals()
-            pcd_norm = np.array(pcd.normals,dtype=np.float32)
-            if self.concat == 'xyz':
-                return np.hstack([pcd_xyz,pcd_norm])  # (N,3), (N,3) -> (N,6)
-            elif self.concat == 'zero-mean':  # 'zero-mean'
-                center = np.mean(pcd_xyz,axis=0,keepdims=True)  # (3,)
-                pcd_zero = pcd_xyz - center
-                pcd_norm *= np.where(np.sum(pcd_zero*pcd_norm,axis=1,keepdims=True)<0,-1,1)
-                return np.hstack([pcd_zero,pcd_norm]) # (N,3),(N,3) -> (N,6)
-            else:
-                raise RuntimeError('Unknown concat mode: %s'%self.concat)
+        return pcd_xyz
 
 class Resampler:
     """ [N, D] -> [M, D]\n
@@ -168,11 +158,111 @@ class KITTISeqBatchSampler(BatchSampler):
     def __len__(self):
         return self.dataset_len
 
+class CustomDataset(Dataset):
+    def __init__(self, gt_Tcl:str, image_dir:str, lidar_dir:str, lidar_pose:str, camera_db:str, image_db:str,
+             pair_file:str, kpt_dir:str, match_dir:str, max_frame_corr:int, resize_size:Optional[Tuple[int,int]]=None,
+             filter_params:Optional[Dict[str,float]]=None, pcd_sample_num:int=-1, extend_ratio:Tuple[int,int]=(2.5,2.5)
+             ):
+        self.gt_Tcl = np.loadtxt(gt_Tcl)
+        image_files = sorted(os.listdir(image_dir))
+        lidar_files = sorted(os.listdir(lidar_dir))
+        kpt_files = sorted(os.listdir(kpt_dir))
+        camera_data = read_cameras_binary(camera_db)[1]
+        assert camera_data.model in CAMERA_TYPE.keys(), 'Unknown camera type:{}'.format(camera_data.model)
+        params_dict = {key: value for key, value in zip(CAMERA_TYPE[camera_data.model], camera_data.params)}
+        if 'f' in params_dict:
+            fx = fy = params_dict['f']
+        else:
+            fx = params_dict['fx']
+            fy = params_dict['fy']
+            cx = params_dict['cx']
+            cy = params_dict['cy']
+        image_data = read_images_binary(image_db)
+        assert len(image_data.keys()) == image_files == lidar_files, "image_data ({}), image_files ({}), lidar_files ({})".format(len(image_data.keys()), image_files, lidar_files)
+        self.img_files = [os.path.join(image_dir, file) for file in image_files]
+        self.lidar_files = [os.path.join(lidar_dir, file) for file in lidar_files]
+        self.kpts = [np.load(os.path.join(kpt_dir, file))['keypoints'] for file in kpt_files]
+        matches = [np.load(os.path.join(match_dir, file))['match'] for file in sorted(os.listdir(match_dir))]
+        self.cam_poses = []
+        for i in range(image_files):
+            img_data = image_data[i]
+            extrinsics = np.eye(4)
+            extrinsics[:3,:3] = img_data.qvec2rotmat()
+            extrinsics[:3,3] = img_data.tvec
+            self.cam_poses.append(extrinsics)
+        pose_graph = o3d.io.read_pose_graph(lidar_pose)
+        lidar_disp = np.array([np.linalg.norm(node.pose[:3,3]) for node in pose_graph.nodes])
+        camera_disp = np.array([np.linalg.norm(mat[:3,3]) for mat in self.cam_poses])
+        self.scale = np.sum(camera_disp * lidar_disp) / np.sum(camera_disp ** 2)
+        self.pair = json.load(open(pair_file, 'r'))
+        self.pair_dict = dict()
+        for i, pair in enumerate(self.pair):
+            src_idx, tgt_idx = pair
+            if tgt_idx - src_idx > max_frame_corr:
+                continue
+            if src_idx not in self.pair_dict.keys():
+                self.pair_dict[src_idx] = []
+            self.pair_dict[src_idx].append([tgt_idx, matches[i]])
+            if tgt_idx not in self.pair_dict.keys():
+                self.pair_dict[tgt_idx] = []
+            self.pair_dict[tgt_idx].append([src_idx, matches[i][:,::-1]])  # swap source and target
+        if resize_size is not None:
+            self.img_tran = Tf.Compose([
+                Tf.ToTensor(),
+                Tf.Resize(resize_size)])
+            fx = resize_size[1] * fx
+            cx = resize_size[1] * cx
+            fy = resize_size[0] * fy
+            cy = resize_size[0] * cy
+            self.image_shape = resize_size
+        else:
+            self.img_tran = Tf.ToTensor()
+            self.image_shape = [camera_data.height, camera_data.width]
+        self.extend_ratio = extend_ratio
+        self.pcd_tran = KITTIFilter(**filter_params) if filter_params else lambda x:x
+        self.resample_tran = Resampler(pcd_sample_num)
+        self.camera_info = {
+            "fx": fx,
+            "fy": fy,
+            "cx": cx,
+            "cy": cy,
+            "sensor_h": camera_data.height,
+            "sensor_w": camera_data.width,
+            "projection_mode": "perspective"
+        }
+        self.tensor_tran = lambda x:torch.from_numpy(x).to(torch.float32)
+    def __len__(self):
+        return len(self.img_files)
+
+    def __getitem__(self, index:int):
+        image = self.img_tran(Image.open(self.img_files[index]))
+        pcd = np.load(self.lidar_files[index])
+        calibed_pcd = nptran(self.gt_Tcl, pcd) # (N, 3)
+        calibed_pcd = self.pcd_tran(calibed_pcd) # (N,3)
+        K_cam = np.array([[self.camera_info['fx'], 0, self.camera_info['cx']],
+                          [0, self.camera_info['fy'], self.camera_info['cx']],
+                          [0,0,1]])
+        REVH,REVW = self.extend_ratio[0]*self.image_shape[0], self.extend_ratio[1]*self.image_shape[1]
+        K_cam_extend = K_cam.copy()  # K_cam_extend for dilated projection
+        K_cam_extend[0,-1] *= self.extend_ratio[0]
+        K_cam_extend[1,-1] *= self.extend_ratio[1]
+        *_,rev = transform.binary_projection((REVH,REVW), K_cam_extend, calibed_pcd.T)
+        calibed_pcd = calibed_pcd[rev,:]  
+        calibed_pcd = self.resample_tran(calibed_pcd) # (n,3)
+        match_list = []
+        tgt_kpt_list = []
+        for tgt_idx, matches in self.pair_dict[index]:
+            match_list.append(matches)
+            tgt_kpt_list.append(self.kpts[tgt_idx])
+        cba_data = dict(src_pcd=calibed_pcd, src_kpt=self.kpts[index], tgt_kpt_list=tgt_kpt_list, match_list=match_list, scale=self.scale)
+        return dict(img=image, pcd=self.tensor_tran(calibed_pcd.T), camera_info=self.camera_info, ExTran=self.gt_Tcl, cba_data=cba_data)
+    
+
 class BaseKITTIDataset(Dataset):
     def __init__(self,basedir:str,
-                 seqs=['09','10'], cam_id:int=2,
+                 seqs:List[str]=['09','10'], cam_id:int=2,
                  meta_json='data_len.json', skip_frame=1,
-                 voxel_size=0.15, pcd_sample_num=8192,
+                 voxel_size=0.15, min_dist=0.15, pcd_sample_num=8192,
                  resize_size:Optional[Tuple[int,int]]=None, extend_ratio=(2.5,2.5),
                  ):
         if not os.path.exists(os.path.join(basedir,meta_json)):
@@ -195,14 +285,14 @@ class BaseKITTIDataset(Dataset):
         self.sep = [len(data) for data in self.kitti_datalist]
         self.sumsep = np.cumsum(self.sep)
         self.resample_tran = Resampler(pcd_sample_num)
-        self.tensor_tran = ToTensor()
+        self.tensor_tran = lambda x:torch.from_numpy(x).to(torch.float32)
         if self.resize_size is not None:
             self.img_tran = Tf.Compose([
                 Tf.ToTensor(),
                 Tf.Resize(self.resize_size)])
         else:
             self.img_tran = Tf.ToTensor()
-        self.pcd_tran = KITTIFilter(voxel_size, 'none')
+        self.pcd_tran = KITTIFilter(voxel_size, min_dist)
         self.extend_ratio = extend_ratio
         
     def __len__(self):
@@ -237,7 +327,7 @@ class BaseKITTIDataset(Dataset):
         K_cam:np.ndarray = getattr(data.calib,'K_cam%d'%self.cam_id)  
         if self.resize_size is not None:
             RH, RW = self.resize_size
-            K_cam = np.diag([RH / H, RW / W, 1.0]) @ K_cam
+            K_cam = np.diag([RW / W, RH / H, 1.0]) @ K_cam
         else:
             RH = H
             RW = W
@@ -247,24 +337,24 @@ class BaseKITTIDataset(Dataset):
         K_cam_extend[1,-1] *= self.extend_ratio[1]
         raw_img = raw_img.resize([RW,RH],Image.BILINEAR)
         _img = self.img_tran(raw_img)  # raw img input (3,H,W)
-        pcd:np.ndarray = data.get_velo(sub_index)
-        pcd[:,3] = 1.0  # (N,4)
-        calibed_pcd = T_cam2velo @ pcd.T  # [4,4] @ [4,N] -> [4,N]
-        _calibed_pcd = self.pcd_tran(calibed_pcd[:3,:].T).T  # calibrated pcd input (3,N)
-        *_,rev = transform.binary_projection((REVH,REVW), K_cam_extend,_calibed_pcd)
-        _calibed_pcd = _calibed_pcd[:,rev]  
-        _calibed_pcd = self.resample_tran(_calibed_pcd.T).T # (3,n)
-        _calibed_pcd = self.tensor_tran(_calibed_pcd)
+        pcd:np.ndarray = data.get_velo(sub_index)[:,:3]
+        pcd = self.pcd_tran(pcd)
+        calibed_pcd = nptran(pcd, T_cam2velo).T
+        *_,rev = transform.binary_projection((REVH,REVW), K_cam_extend, calibed_pcd)
+        pcd = pcd[rev,:]
+        pcd = self.resample_tran(pcd) # (n,3)
+        _pcd = self.tensor_tran(pcd.T)
         T_cam2velo = self.tensor_tran(T_cam2velo)
         camera_info = {
-            "f": K_cam[0,0].item(),
+            "fx": K_cam[0,0].item(),
+            "fy": K_cam[1,1].item(),
             "cx": K_cam[0,2].item(),
             "cy": K_cam[1,2].item(),
             "sensor_h": RH,
             "sensor_w": RW,
             "projection_mode": "perspective"
         }
-        return dict(img=_img,pcd=_calibed_pcd, camera_info=camera_info, ExTran=T_cam2velo)
+        return dict(img=_img,pcd=_pcd, camera_info=camera_info, ExTran=T_cam2velo)
     
     @staticmethod
     def collate_fn(zipped_x:Iterable[Dict[str, Union[torch.Tensor, Dict]]]):
@@ -304,22 +394,24 @@ class PertubKITTIDataset(Dataset):
             total_index = self.dataset.sumsep[group_idx] + sub_index
         else:
             total_index = index
-        calibed_pcd = data['pcd']  # (3,N)
+        extran = data['ExTran']  # (4,4)
         if self.file is None:  # randomly generate igt
-            _uncalib_pcd = self.transform(calibed_pcd[None,:,:]).squeeze(0)  # (3,N)
-            gt = self.transform.igt.squeeze(0)  # (4,4)
+            igt_x = self.transform.generate_transform(1)
+            igt = se3.exp(igt_x).squeeze(0)
+            gt = transform.inv_pose(igt)
         else:
-            igt = se3.exp(self.perturb[:,total_index,:])  # (1,6) -> (1,4,4)
-            _uncalib_pcd = se3.transform(igt,calibed_pcd[None,...]).squeeze(0)  # (3,N)
+            igt = se3.exp(self.perturb[:,total_index,:]).squeeze(0)  # (1,6) -> (1,4,4)
             gt = transform.inv_pose(igt).squeeze(0)
-        new_data = dict(img=data['img'],uncalib_pcd=_uncalib_pcd, gt=gt, camera_info=data['camera_info'])
+        extran = igt @ extran
+        new_data = dict(img=data['img'],pcd= data['pcd'], gt=gt, extran=extran, camera_info=data['camera_info'])
         return new_data
     
     @staticmethod
     def collate_fn(zipped_x:Iterable[Dict[str, Union[torch.Tensor, Dict]]]):
         batch = dict()
         batch['img'] = torch.stack([x['img'] for x in zipped_x])
-        batch['uncalib_pcd'] = torch.stack([x['uncalib_pcd'] for x in zipped_x])
+        batch['pcd'] = torch.stack([x['pcd'] for x in zipped_x])
+        batch['extran'] = torch.stack([x['extran'] for x in zipped_x])
         batch['gt'] = torch.stack([x['gt'] for x in zipped_x])
         batch['camera_info'] = zipped_x[0]['camera_info']
         return batch
@@ -363,7 +455,7 @@ class PertubSeqKITTIDataset(Dataset):
         
         
 if __name__ == "__main__":
-    base_dataset = BaseKITTIDataset('data/kitti', 1, seqs=['00','01'], skip_frame=3)
+    base_dataset = BaseKITTIDataset('data/kitti', seqs=['00','01'], skip_frame=3)
     dataset = PertubKITTIDataset(base_dataset, 30, 0.3, True)
     data = dataset[0]
     for key,value in data.items():
