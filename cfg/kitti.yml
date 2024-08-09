@@ -2,12 +2,12 @@ seed: 2514
 device: cuda:0
 path:
   name: single
-  base_dir: experiments/linear/
+  base_dir: experiments/linear_static/
   log: log
   results: results
   checkpoint: checkpoint
   resume: null
-  pretrain: null
+  pretrain: experiments/linear_static/single/checkpoint/best_model.pth
 dataset:
   common_args: &dataset_common_args
     basedir: ./data/kitti/
@@ -30,7 +30,7 @@ dataset:
           mag_randomly: false
       val:
         base:
-          seqs: ['13','14','19','20']
+          seqs: ['05','06']
           <<: *dataset_common_args
         main:
           max_deg: 15
@@ -56,34 +56,34 @@ dataset:
       max_tran: 0.1
       mag_randomly: false
     dataset:
-      - name: seq_05
+      - name: seq_13
         base:
-          seqs: ['05']
+          seqs: ['13']
           <<: *dataset_common_args
         main:
           <<: *test_common_main
-          file: cache/test_05.txt
-      - name: seq_06
+          file: cache/test_13.txt
+      - name: seq_14
         base:
-          seqs: ['06']
+          seqs: ['14']
           <<: *dataset_common_args
         main:
           <<: *test_common_main
-          file: cache/test_06.txt
-      - name: seq_21
+          file: cache/test_14.txt
+      - name: seq_15
         base:
-          seqs: ['21']
+          seqs: ['15']
           <<: *dataset_common_args
         main:
           <<: *test_common_main
-          file: cache/test_21.txt
+          file: cache/test_15.txt
 
     dataloader:
       batch_size: 32
       shuffle: false
       drop_last: false
       pin_memory: true
-      num_workers: 4
+      num_workers: 8
 model:
   surrogate:
     hidden_dims: [128, 128, 128, 128]
@@ -123,9 +123,10 @@ optimizer:
   max_grad: 1.0
 
 scheduler:
-  type: exponential
+  type: step
   args:
-    gamma: 0.95
+    step_size: 5
+    gamma: 0.5
 run:
   n_epoch: 50
   val_per_epoch: 5
