@@ -7,7 +7,7 @@ from collections.abc import Iterable
 def inv_pose(pose_mat:torch.Tensor):
     inv_pose_mat = pose_mat.clone()
     inv_pose_mat[...,:3,:3] = pose_mat[...,:3,:3].transpose(-1,-2)
-    inv_pose_mat[...,:3,[3]] = torch.bmm(-inv_pose_mat[...,:3,:3], pose_mat[...,:3,[3]])
+    inv_pose_mat[...,:3,[3]] = -inv_pose_mat[...,:3,:3] @ pose_mat[...,:3,[3]]
     return inv_pose_mat
 
 class RandomTransformSE3:
