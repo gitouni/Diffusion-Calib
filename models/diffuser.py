@@ -228,22 +228,27 @@ class Diffuser(BaseNetwork):
 		return model_mean + noise * (0.5 * model_log_variance).exp()
 
 	@torch.inference_mode()
-	def ddpm_sampling(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, Dict]) -> torch.Tensor:
+	def ddpm_sampling(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]) -> torch.Tensor:
 		b = x_T.shape[0]
 		x_t = x_T.clone()
+		self.x0_fn.clear_buffer()
+		self.x0_fn.restore_buffer(x_cond[:2])
 		for i in tqdm(reversed(range(0, self.num_timesteps)), desc='ddpm sampling', total=self.num_timesteps):
 			t = torch.full((b,), i, device=x_t.device, dtype=torch.long)
 			x_t = self.p_sample(x_t, t, x_cond=x_cond)
+		self.x0_fn.clear_buffer()
 		return x_t
 	
 
 	@torch.inference_mode()
-	def dpm_sampling(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, Dict]) -> torch.Tensor:
+	def dpm_sampling(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]) -> torch.Tensor:
 		def model_fn(x_t, t, x_cond):
 			out = self.x0_fn.forward(x_t, x_cond)
 			# If the model outputs both 'mean' and 'variance' (such as improved-DDPM and guided-diffusion),
 			# We only use the 'mean' output for DPM-Solver, because DPM-Solver is based on diffusion ODEs.
 			return out
+		self.x0_fn.clear_buffer()
+		self.x0_fn.restore_buffer(x_cond[:2])
 		noise_schedule = NoiseScheduleVP(schedule='discrete', alphas_cumprod=self.gammas)
 		model_fn_continuous = model_wrapper(
 			model_fn,
@@ -261,6 +266,7 @@ class Diffuser(BaseNetwork):
 			x_T,
 			**self.dpm_argv
 		)
+		self.x0_fn.clear_buffer()
 		return x_0_hat
 
 	def forward(self, x_0:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, Dict], noise=None) -> torch.Tensor:

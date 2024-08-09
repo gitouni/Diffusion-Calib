@@ -20,10 +20,17 @@ class Surrogate(nn.Module):
         mlps.append(nn.Linear(hidden_dims[-1], x_dim))
         self.mlps = nn.Sequential(*mlps)
 
-    def forward(self, img:torch.Tensor, pcd:torch.Tensor, camera_info:Dict):
-        feat = self.encoder(img, pcd, camera_info)  # (B, D)
+    def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
+        feat = self.encoder(img, pcd, Tcl, camera_info)  # (B, D)
         x0 = self.mlps(feat)
         return x0  # (B, x_dim)
+    
+    def restore_buffer(self, x_cond:Tuple[torch.Tensor, torch.Tensor]):
+        img, pcd = x_cond
+        self.encoder.restore_buffer(img, pcd)
+
+    def clear_buffer(self):
+        self.encoder.clear_buffer()
     
 class SeqSurrogate(nn.Module):
     def __init__(self, hidden_dims:Sequence[int], x_dim:int, encoder_argv:Dict, atten_argv:Dict) -> None:
@@ -41,24 +48,32 @@ class SeqSurrogate(nn.Module):
         mlps.append(nn.Linear(hidden_dims[-1], x_dim))
         self.mlps = nn.Sequential(*mlps)
 
-    def forward(self, img:torch.Tensor, pcd:torch.Tensor, camera_info:Dict):
+    def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
         B, K, C, H, W = img.shape
         B, K, _, N = pcd.shape
-        feat = self.encoder(img.view(B*K, C, H, W), pcd.view(B*K,-1,N), camera_info)  # (B*K, D)
+        Tcl_expand = Tcl.unsqueeze(1).expand(B, K, 4, 4)
+        feat = self.encoder(img.view(B*K, C, H, W), pcd.view(B*K,-1,N), Tcl_expand.view(B*K,4,4), camera_info)  # (B*K, D)
         feat = self.atten(torch.cat([feat.view(B, K, -1), self.reg_token.expand(B, 1, -1)], dim=1))  # (B, K+1, D)
         x0 = self.mlps(feat[:,-1,:])  # the final token has cross attention with other tokens
         return x0  # (B, x_dim)
     
 class Denoiser(nn.Module):
-    def __init__(self, model:nn.Module):
+    def __init__(self, model:Surrogate):
         super().__init__()
         self.model = model
 
-    def forward(self, x_t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor]):
-        img, pcd, camera_info = x_cond
+    def restore_buffer(self, x_cond:Tuple[torch.Tensor, torch.Tensor]):
+        img, pcd = x_cond
+        self.model.restore_buffer(img, pcd)
+
+    def clear_buffer(self):
+        self.model.clear_buffer()
+
+    def forward(self, x_t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]):
+        img, pcd, Tcl, camera_info = x_cond
         se3_x_t = se3.exp(x_t)
-        pcd_tf = se3.transform(se3_x_t, pcd)  # transformed pcd
-        delta_x0 = self.model(img, pcd_tf, camera_info)
+        Tcl = se3_x_t @ Tcl
+        delta_x0 = self.model(img, pcd, Tcl, camera_info)
         x0 = se3.exp(delta_x0) @ se3_x_t  # sequentially transformed by se3_x_t and x0
         return se3.log(x0)
     
@@ -67,11 +82,14 @@ class SeqDenoiser(nn.Module):
         super().__init__()
         self.model = model
 
-    def forward(self, x_t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor]):
-        img, pcd, camera_info = x_cond  # (B, K, C, H, W),  (B, K, 3, N), Dict
+    def forward(self, x_t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]):
+        img, pcd, Tcl, camera_info = x_cond  # (B, K, C, H, W),  (B, K, 3, N), Dict
         K = pcd.shape[1]
         se3_x_t = se3.exp(x_t) # (B, 4, 4)
-        pcd_tf = se3.transform(se3_x_t.unsqueeze(1).expand(-1, K, -1, -1), pcd)  # transformed pcd  (B, K, 3, N)
-        delta_x0 = self.model(img, pcd_tf, camera_info)
+        Tcl = se3_x_t @ Tcl
+        delta_x0 = self.model(img, pcd, Tcl, camera_info)
         x0 = se3.exp(delta_x0) @ se3_x_t  # (B, 4, 4)
         return se3.log(x0)  # (B, 6)
+    
+# class GuidanceSampler:
+#     def __init__(self, corr_data):
