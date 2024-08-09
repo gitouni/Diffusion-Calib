@@ -249,23 +249,27 @@ def resize_to_64x(inputs, target, x=64):
 
 def project_pc2image(pc, camera_info):
     assert pc.shape[1] == 3  # channel first
-    batch_size, n_points = pc.shape[0], pc.shape[-1]
+    batch_size = pc.shape[0]
 
     if isinstance(camera_info['cx'], torch.Tensor):
-        cx = camera_info['cx'][:, None].expand([batch_size, n_points])
-        cy = camera_info['cy'][:, None].expand([batch_size, n_points])
+        cx = camera_info['cx'][:, None].expand([batch_size, 1])
+        cy = camera_info['cy'][:, None].expand([batch_size, 1])
     else:
         cx = camera_info['cx']
         cy = camera_info['cy']
 
     if camera_info['projection_mode'] == 'perspective':
-        if isinstance(camera_info['f'], torch.Tensor):
-            f = camera_info['f'][:, None].expand([batch_size, n_points])
+        if isinstance(camera_info['fx'], torch.Tensor):
+            fx = camera_info['fx'][:, None].expand([batch_size, 1])
         else:
-            f = camera_info['f']
+            fx = camera_info['fx']
+        if isinstance(camera_info['fy'], torch.Tensor):
+            fy = camera_info['fy'][:, None].expand([batch_size, 1])
+        else:
+            fy = camera_info['fy']
         pc_x, pc_y, pc_z = pc[:, 0, :], pc[:, 1, :], pc[:, 2, :]
-        image_x = cx + (f / pc_z) * pc_x
-        image_y = cy + (f / pc_z) * pc_y
+        image_x = cx + (fx / pc_z) * pc_x
+        image_y = cy + (fy / pc_z) * pc_y
     elif camera_info['projection_mode'] == 'parallel':
         image_x = pc[:, 0, :] + cx
         image_y = pc[:, 1, :] + cy
