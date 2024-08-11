@@ -161,7 +161,7 @@ class KITTISeqBatchSampler(BatchSampler):
 class CustomDataset(Dataset):
     def __init__(self, gt_Tcl:str, image_dir:str, lidar_dir:str, lidar_pose:str, camera_db:str, image_db:str,
              pair_file:str, kpt_dir:str, match_dir:str, max_frame_corr:int, resize_size:Optional[Tuple[int,int]]=None,
-             filter_params:Optional[Dict[str,float]]=None, pcd_sample_num:int=-1, extend_ratio:Tuple[int,int]=(2.5,2.5)
+             filter_params:Optional[Dict[str,float]]=None, pcd_sample_num:int=-1
              ):
         self.gt_Tcl = np.loadtxt(gt_Tcl)
         image_files = sorted(os.listdir(image_dir))
@@ -218,7 +218,6 @@ class CustomDataset(Dataset):
         else:
             self.img_tran = Tf.ToTensor()
             self.image_shape = [camera_data.height, camera_data.width]
-        self.extend_ratio = extend_ratio
         self.pcd_tran = KITTIFilter(**filter_params) if filter_params else lambda x:x
         self.resample_tran = Resampler(pcd_sample_num)
         self.camera_info = {
@@ -237,26 +236,61 @@ class CustomDataset(Dataset):
     def __getitem__(self, index:int):
         image = self.img_tran(Image.open(self.img_files[index]))
         pcd = np.load(self.lidar_files[index])
-        calibed_pcd = nptran(self.gt_Tcl, pcd) # (N, 3)
-        calibed_pcd = self.pcd_tran(calibed_pcd) # (N,3)
-        K_cam = np.array([[self.camera_info['fx'], 0, self.camera_info['cx']],
-                          [0, self.camera_info['fy'], self.camera_info['cx']],
-                          [0,0,1]])
-        REVH,REVW = self.extend_ratio[0]*self.image_shape[0], self.extend_ratio[1]*self.image_shape[1]
-        K_cam_extend = K_cam.copy()  # K_cam_extend for dilated projection
-        K_cam_extend[0,-1] *= self.extend_ratio[0]
-        K_cam_extend[1,-1] *= self.extend_ratio[1]
-        *_,rev = transform.binary_projection((REVH,REVW), K_cam_extend, calibed_pcd.T)
-        calibed_pcd = calibed_pcd[rev,:]  
-        calibed_pcd = self.resample_tran(calibed_pcd) # (n,3)
+        pcd_rev = pcd[:,0] > 0
+        pcd = self.pcd_tran(pcd[pcd_rev,:])
+        pcd = self.resample_tran(pcd)  # (N, 3)
         match_list = []
         tgt_kpt_list = []
+        src_extran = self.cam_poses[index]
+        tgt_extran_list = []
         for tgt_idx, matches in self.pair_dict[index]:
             match_list.append(matches)
             tgt_kpt_list.append(self.kpts[tgt_idx])
-        cba_data = dict(src_pcd=calibed_pcd, src_kpt=self.kpts[index], tgt_kpt_list=tgt_kpt_list, match_list=match_list, scale=self.scale)
-        return dict(img=image, pcd=self.tensor_tran(calibed_pcd.T), camera_info=self.camera_info, ExTran=self.gt_Tcl, cba_data=cba_data)
-    
+            tgt_extran_list.append(self.cam_poses[tgt_idx])
+        intran = np.array([[self.camera_info['fx'],0,self.camera_info['cx']],
+                           [0,self.camera_info['fy'],self.camera_info['cy']],
+                           [0,0,1]])
+        image_hw = (self.camera_info['sensor_h'], self.camera_info['sensor_w'])
+        cba_data = dict(src_pcd=pcd, src_kpt=self.kpts[index], tgt_kpt_list=tgt_kpt_list, match_list=match_list,
+            src_extran=src_extran, tgt_extran_list=tgt_extran_list, intran=intran, scale=self.scale, image_hw=image_hw)
+        return dict(img=image, pcd=self.tensor_tran(pcd.T), camera_info=self.camera_info, extran=self.gt_Tcl, cba_data=cba_data)
+
+class PerturbCustomDataset(Dataset):
+    def __init__(self,dataset:CustomDataset,
+                 max_deg:float,
+                 max_tran:float,
+                 mag_randomly=True,
+                 file=None):
+        self.dataset = dataset
+        self.file = file
+        if self.file is not None:
+            if os.path.isfile(self.file):
+                self.perturb = torch.from_numpy(np.loadtxt(self.file, dtype=np.float32))[None,...]  # (1,N,6)
+            else:
+                random_transform = transform.UniformTransformSE3(max_deg, max_tran, mag_randomly)
+                perturb = random_transform.generate_transform(len(dataset))
+                np.savetxt(self.file, perturb.cpu().detach().numpy(), fmt='%0.6f')
+                self.perturb = perturb.unsqueeze(0)  # (1,N,6)
+        else:
+            self.transform = transform.UniformTransformSE3(max_deg, max_tran, mag_randomly)
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index:int):
+        data = self.dataset[index]
+        if self.file is None:  # randomly generate igt
+            igt_x = self.transform.generate_transform(1)
+            igt = se3.exp(igt_x).squeeze(0)
+            gt = transform.inv_pose(igt)
+        else:
+            igt = se3.exp(self.perturb[:,index,:]).squeeze(0)  # (1,6) -> (1,4,4)
+            gt = transform.inv_pose(igt).squeeze(0)
+        extran = igt @ data['extran']  # add noise to the ground-truth extran
+        new_data = dict(gt=gt, extran=extran, **data)
+        return new_data
+
+
 
 class BaseKITTIDataset(Dataset):
     def __init__(self,basedir:str,
@@ -403,7 +437,7 @@ class PertubKITTIDataset(Dataset):
             igt = se3.exp(self.perturb[:,total_index,:]).squeeze(0)  # (1,6) -> (1,4,4)
             gt = transform.inv_pose(igt).squeeze(0)
         extran = igt @ extran
-        new_data = dict(img=data['img'],pcd= data['pcd'], gt=gt, extran=extran, camera_info=data['camera_info'])
+        new_data = dict(img=data['img'],pcd=data['pcd'], gt=gt, extran=extran, camera_info=data['camera_info'])
         return new_data
     
     @staticmethod
