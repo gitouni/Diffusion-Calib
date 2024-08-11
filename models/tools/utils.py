@@ -279,7 +279,7 @@ def project_pc2image(pc, camera_info):
     return torch.cat([
         image_x[:, None, :],
         image_y[:, None, :],
-    ], dim=1)
+    ], dim=1)  # (B, 2, N)
 
 
 @torch.cuda.amp.autocast(enabled=False)

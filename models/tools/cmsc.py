@@ -1,7 +1,7 @@
 from .utils import k_nearest_neighbor, project_pc2image
 import numpy as np
 from scipy.spatial import KDTree
-from typing import Tuple, Iterable
+from typing import Tuple, Iterable, List, Dict
 from scipy.spatial.transform import Rotation
 
 def skew(x:np.ndarray):
@@ -229,15 +229,17 @@ def CBACorr(src_pcd:np.ndarray, src_kpt:np.ndarray,
     ii = ii[dist_rev]
     return src_rev[ii], dist_rev
 
-def CBABatchCorr(src_pcd:np.ndarray, src_kpt:np.ndarray, match_list:Iterable[np.ndarray],
+def CBABatchCorr(src_pcd:np.ndarray, src_kpt:np.ndarray, 
+        tgt_kpt_list:Iterable[np.ndarray], match_list:Iterable[np.ndarray],
         src_extran:np.ndarray, tgt_extran_list:Iterable[np.ndarray],
         intran:np.ndarray, Tcl:np.ndarray, scale:float, img_hw:Tuple[int,int],
-        max_dist:float, proj_constraint:bool=False) -> Tuple[np.ndarray, np.ndarray]:
+        max_dist:float, proj_constraint:bool=False) -> List[Dict[str, np.ndarray]]:
     """Compute CBA Correspondences
 
     Args:
         src_pcd (np.ndarray): source point cloud (N, 3)
-        src_kpt (np.ndarray): source keypoints (M, 2)
+        src_kpt (np.ndarray): source keypoints (M1, 2)
+        tgt_kpt_list:Iterable[np.ndarray]: Iterable of target indices keypoints: (M2, 2)
         match_list (Iterable[np.ndarray]): Iterable of match indices format:(src_idx, tgt_idx)
         src_extran (np.ndarray): Tcw of source frame (4,4)
         tgt_extran_list (Iterable[np.ndarray]): Sequence of Tcw of target frame (4,4)
@@ -249,18 +251,22 @@ def CBABatchCorr(src_pcd:np.ndarray, src_kpt:np.ndarray, match_list:Iterable[np.
         proj_constraint (bool, optional): whether to apply image bouding constraints to cross-frame projection. Defaults to False.
 
     Returns:
-        Tuple[np.ndarray, np.ndarray]: index of src_pcd, index of src_kpt/tgt_kpt 
+        List[Dict[str, np.ndarray]]: src_pcd, tgt_kpt, relpose
     """
-    src_pcd = nptran(src_pcd, Tcl)  # camera coordinate (source frame)
-    src_proj, src_rev = npproj(src_pcd, np.eye(4), intran, img_hw)
-    
-    relpose = src_extran @ inv_pose(tgt_extran)
-    relpose[:3,3] *= scale
-    tgt_pcd = nptran(src_pcd, relpose)
     proj_func = project_constraint_corr_pts if proj_constraint else project_corr_pts
-    src_proj, _, src_rev = proj_func(src_pcd, tgt_pcd, np.eye(4), intran, img_hw, return_indices=True)
-    tree = KDTree(src_proj, leafsize=10)
-    dist, ii = tree.query(src_kpt, k=1, eps=0.1)
-    dist_rev = dist < max_dist ** 2
-    ii = ii[dist_rev]
-    return src_rev[ii], dist_rev
+    raw_src_pcd = nptran(src_pcd, Tcl)  # camera coordinate (source frame)
+    corr_data = []
+    for match, tgt_kpt, tgt_extran in zip(match_list, tgt_kpt_list, tgt_extran_list):
+        relpose = src_extran @ inv_pose(tgt_extran)  # Tc1,w x Tw,c2
+        relpose[:3,3] *= scale
+        tgt_pcd = nptran(raw_src_pcd, relpose)
+        src_proj, _, src_proj_rev = proj_func(raw_src_pcd, tgt_pcd, np.eye(4), intran, img_hw, return_indices=True)
+        tree = KDTree(src_proj, leafsize=10)
+        dist, ii = tree.query(src_kpt[match[:,0], :], k=1)  # len of src_kpt
+        dist_rev = dist < max_dist ** 2
+        ii = ii[dist_rev]  # indices of src_pcd[src_rev]
+        matched_tgt_kpt = tgt_kpt[match[:,1],:][dist_rev]
+        matched_src_pcd = raw_src_pcd[src_proj_rev][ii]
+        corr_data.append(dict(src_pcd=matched_src_pcd,
+            tgt_kpt=matched_tgt_kpt, relpose=relpose))
+    return corr_data
