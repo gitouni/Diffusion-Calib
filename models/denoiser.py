@@ -7,6 +7,7 @@ from typing import Dict, Sequence, Tuple
 
 
 
+
 class Surrogate(nn.Module):
     def __init__(self, hidden_dims:Sequence[int], x_dim:int, encoder_argv:Dict) -> None:
         super().__init__()
@@ -91,5 +92,5 @@ class SeqDenoiser(nn.Module):
         x0 = se3.exp(delta_x0) @ se3_x_t  # (B, 4, 4)
         return se3.log(x0)  # (B, 6)
     
-# class GuidanceSampler:
-#     def __init__(self, corr_data):
+
+        

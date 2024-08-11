@@ -179,6 +179,7 @@ def model_wrapper(
     guidance_scale=1.,
     classifier_fn=None,
     classifier_kwargs={},
+    classifier_t_threshold:float=1.0
 ):
     """Create a wrapper function for the noise prediction model.
 
@@ -319,16 +320,17 @@ def model_wrapper(
         """
         The noise predicition model function that is used for DPM-Solver.
         """
-        if guidance_type == "uncond":
+        sampling_type = guidance_type if t_continuous < classifier_t_threshold else 'uncond'
+        if sampling_type == "uncond":
             return noise_pred_fn(x, t_continuous)
-        elif guidance_type == "classifier":
+        elif sampling_type == "classifier":
             assert classifier_fn is not None
             t_input = get_model_input_time(t_continuous)
             cond_grad = cond_grad_fn(x, t_input)
             sigma_t = noise_schedule.marginal_std(t_continuous)
             noise = noise_pred_fn(x, t_continuous)
             return noise - guidance_scale * expand_dims(sigma_t, x.dim()) * cond_grad
-        elif guidance_type == "classifier-free":
+        elif sampling_type == "classifier-free":
             if guidance_scale == 1. or unconditional_condition is None:
                 return noise_pred_fn(x, t_continuous, cond=condition)
             else:

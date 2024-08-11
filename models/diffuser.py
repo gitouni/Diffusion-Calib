@@ -5,10 +5,12 @@ from inspect import isfunction
 from functools import partial
 import numpy as np
 from tqdm import tqdm
-from typing import Union, Tuple, Literal, Iterable, Dict
-from .util.se3 import exp as se3_exp
+from typing import Union, Tuple, Literal, Iterable, Dict, Callable, Optional
+from .util import se3
 from .denoiser import Denoiser
 from .dpm import NoiseScheduleVP, DPM_Solver, model_wrapper
+from .tools.cmsc import CBABatchCorr
+from .tools.utils import project_pc2image
 
 def exists(x):
 	return x is not None
@@ -24,23 +26,23 @@ def extract(a:torch.Tensor, t:torch.Tensor, x_shape=(1,1,1,1)):
 	return out.reshape(b, *((1,) * (len(x_shape) - 1)))
 
 def linear_beta_schedule(timesteps):
-    scale = 1000 / timesteps
-    beta_start = scale * 0.0001
-    beta_end = scale * 0.02
-    return torch.linspace(beta_start, beta_end, timesteps, dtype=torch.float64)
+	scale = 1000 / timesteps
+	beta_start = scale * 0.0001
+	beta_end = scale * 0.02
+	return torch.linspace(beta_start, beta_end, timesteps, dtype=torch.float64)
 
 
 def cosine_beta_schedule(timesteps, s=0.008):
-    """
-    cosine schedule
-    as proposed in https://openreview.net/forum?id=-NEXDKk8gZ
-    """
-    steps = timesteps + 1
-    x = torch.linspace(0, timesteps, steps, dtype=torch.float64)
-    alphas_cumprod = torch.cos(((x / timesteps) + s) / (1 + s) * math.pi * 0.5) ** 2
-    alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
-    betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
-    return torch.clip(betas, 0, 0.999)
+	"""
+	cosine schedule
+	as proposed in https://openreview.net/forum?id=-NEXDKk8gZ
+	"""
+	steps = timesteps + 1
+	x = torch.linspace(0, timesteps, steps, dtype=torch.float64)
+	alphas_cumprod = torch.cos(((x / timesteps) + s) / (1 + s) * math.pi * 0.5) ** 2
+	alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
+	betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
+	return torch.clip(betas, 0, 0.999)
 
 def make_beta_schedule(schedule:Literal['quad','linear','warmup10','warmup50','const','jsd','cosine'],
 						n_timestep:int, linear_start:float=1e-6, linear_end:float=1e-2, cosine_s:float=8e-3):
@@ -232,23 +234,23 @@ class Diffuser(BaseNetwork):
 		b = x_T.shape[0]
 		x_t = x_T.clone()
 		self.x0_fn.clear_buffer()
-		self.x0_fn.restore_buffer(x_cond[:2])
+		self.x0_fn.restore_buffer(x_cond[:2])  # img, pcd
 		for i in tqdm(reversed(range(0, self.num_timesteps)), desc='ddpm sampling', total=self.num_timesteps):
 			t = torch.full((b,), i, device=x_t.device, dtype=torch.long)
-			x_t = self.p_sample(x_t, t, x_cond=x_cond)
+			x_t = self.p_sample(x_t, t, x_cond=x_cond)  # img, pcd, init_Tcl, camera_info
 		self.x0_fn.clear_buffer()
 		return x_t
 	
 
 	@torch.inference_mode()
 	def dpm_sampling(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]) -> torch.Tensor:
-		def model_fn(x_t, t, x_cond):
+		def model_fn(x_t:torch.Tensor, t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]):
 			out = self.x0_fn.forward(x_t, x_cond)
 			# If the model outputs both 'mean' and 'variance' (such as improved-DDPM and guided-diffusion),
 			# We only use the 'mean' output for DPM-Solver, because DPM-Solver is based on diffusion ODEs.
 			return out
 		self.x0_fn.clear_buffer()
-		self.x0_fn.restore_buffer(x_cond[:2])
+		self.x0_fn.restore_buffer(x_cond[:2])  # img, pcd, init_Tcl, camera_info
 		noise_schedule = NoiseScheduleVP(schedule='discrete', alphas_cumprod=self.gammas)
 		model_fn_continuous = model_wrapper(
 			model_fn,
@@ -256,6 +258,41 @@ class Diffuser(BaseNetwork):
 			model_kwargs={"x_cond":x_cond},
 			model_type='x_start',
 			guidance_type='uncond'
+		)
+		dpm_solver = DPM_Solver(
+			model_fn_continuous,
+			noise_schedule,
+			algorithm_type="dpmsolver++"
+		)
+		x_0_hat = dpm_solver.sample(
+			x_T,
+			**self.dpm_argv
+		)
+		self.x0_fn.clear_buffer()
+		return x_0_hat
+	
+	@torch.inference_mode()
+	def dpm_sampling_with_guidance(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict], corr_data:Dict[str,np.ndarray], classifier_fn_argv:Dict, classifier_t_threshold:float) -> torch.Tensor:
+		def model_fn(x_t:torch.Tensor, t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]):
+			out = self.x0_fn.forward(x_t, x_cond)
+			# If the model outputs both 'mean' and 'variance' (such as improved-DDPM and guided-diffusion),
+			# We only use the 'mean' output for DPM-Solver, because DPM-Solver is based on diffusion ODEs.
+			return out
+		def classifier_fn_wrapper(x_t:torch.Tensor, t:torch.Tensor, camera_info:Dict):
+			return classifer_guidance.classifer_fn(x_t, camera_info)
+		self.x0_fn.clear_buffer()
+		self.x0_fn.restore_buffer(x_cond[:2])  # img, pcd, init_Tcl, camera_info
+		noise_schedule = NoiseScheduleVP(schedule='discrete', alphas_cumprod=self.gammas)
+		classifer_guidance = GuidanceSampler(**classifier_fn_argv, corr_data=corr_data)
+		model_fn_continuous = model_wrapper(
+			model_fn,
+			noise_schedule,
+			model_kwargs={"x_cond":x_cond},
+			model_type='x_start',
+			guidance_type='classifier',
+			classifier_fn= classifier_fn_wrapper,
+			classifier_kwargs=dict(camera_info=x_cond[-1]),
+			classifier_t_threshold=classifier_t_threshold
 		)
 		dpm_solver = DPM_Solver(
 			model_fn_continuous,
@@ -288,8 +325,33 @@ class Diffuser(BaseNetwork):
 		noise = default(noise, torch.zeros_like(x_0))  # x_T = 0
 		x_t = self.q_sample(
 			x_0=x_0, sample_gammas=sample_gammas.view(b,1), noise=noise)
-		x_0_hat = self.x0_fn.forward(x_t, x_cond)
+		x_0_hat = self.x0_fn.forward(x_t, x_cond)  # img, pcd, init_Tcl, camera_info
 		loss = self.loss_fn(x_0_hat, x_0)
 		return loss, x_0_hat
 	
+class GuidanceSampler:
+	def __init__(self, loss_fn:Callable, corr_data:Dict, max_corr_dist:float, proj_constraint:bool=True):
+		corr_data.update({"max_dist":max_corr_dist, "proj_constraint":proj_constraint})
+		self.corr_data = corr_data
+		self.loss = loss_fn
 
+	def classifer_fn(self, se3_x:torch.Tensor, camera_info:Dict):
+		se3_extran = se3.exp(se3_x)
+		Tcl = se3_extran.squeeze(0).cpu().detach().numpy()
+		assert np.ndim(Tcl) == 2, 'classifer guidances can only handle batch = 1, get {}'.format(Tcl.shape[0])
+		corr_res_list = CBABatchCorr(**self.corr_data, Tcl=Tcl)
+		loss = 0
+		for corr_res in corr_res_list:
+			relpose = torch.from_numpy(corr_res['relpose']).to(se3_x).unsqueeze(0)  # (1, 4, 4)
+			src_pcd = torch.from_numpy(corr_res['src_pcd']).to(se3_x).transpose(-1,-2).unsqueeze(0)  # (1, 3, N)
+			tgt_pcd = se3.transform(relpose @ se3_extran, src_pcd)
+			tgt_proj = project_pc2image(tgt_pcd, camera_info)  # (1, 2, N)
+			tgt_kpt = torch.from_numpy(corr_res['tgt_kpt']).to(se3_x).unsqueeze(0)
+			loss += self.loss(tgt_proj, tgt_kpt)
+		loss /= len(corr_res_list)
+		return loss
+
+	@staticmethod
+	def check_data(corr_data:Dict):
+		# dict(src_pcd=pcd, src_kpt=self.kpts[index], tgt_kpt_list=tgt_kpt_list, match_list=match_list, scale=self.scale)
+		return True
