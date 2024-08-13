@@ -26,8 +26,7 @@ class Surrogate(nn.Module):
         x0 = self.mlps(feat)
         return x0  # (B, x_dim)
     
-    def restore_buffer(self, x_cond:Tuple[torch.Tensor, torch.Tensor]):
-        img, pcd = x_cond
+    def restore_buffer(self, img:torch.Tensor, pcd:torch.Tensor):
         self.encoder.restore_buffer(img, pcd)
 
     def clear_buffer(self):

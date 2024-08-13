@@ -314,23 +314,25 @@ def model_wrapper(
         with torch.enable_grad():
             x_in = x.detach().requires_grad_(True)
             log_prob = classifier_fn(x_in, t_input, condition, **classifier_kwargs)
-            return torch.autograd.grad(log_prob.sum(), x_in)[0]
-
+            if not isinstance(log_prob, torch.Tensor):
+                return torch.zeros_like(x_in)
+            return torch.autograd.grad(log_prob, x_in)  
     def model_fn(x, t_continuous):
         """
         The noise predicition model function that is used for DPM-Solver.
         """
-        sampling_type = guidance_type if t_continuous < classifier_t_threshold else 'uncond'
-        if sampling_type == "uncond":
+        if guidance_type == "uncond":
             return noise_pred_fn(x, t_continuous)
-        elif sampling_type == "classifier":
+        elif guidance_type == "classifier":
+            if t_continuous > classifier_t_threshold:
+                return noise_pred_fn(x, t_continuous)
             assert classifier_fn is not None
             t_input = get_model_input_time(t_continuous)
             cond_grad = cond_grad_fn(x, t_input)
             sigma_t = noise_schedule.marginal_std(t_continuous)
             noise = noise_pred_fn(x, t_continuous)
             return noise - guidance_scale * expand_dims(sigma_t, x.dim()) * cond_grad
-        elif sampling_type == "classifier-free":
+        elif guidance_type == "classifier-free":
             if guidance_scale == 1. or unconditional_condition is None:
                 return noise_pred_fn(x, t_continuous, cond=condition)
             else:
