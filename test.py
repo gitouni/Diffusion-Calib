@@ -34,7 +34,7 @@ def get_dataloader(test_dataset_argv:Iterable[Dict], test_dataloader_argv:Dict):
 @torch.inference_mode()
 def test_diffuser(test_loader:DataLoader, name:str, diffuser:Diffuser, logger:logging.Logger, device:torch.device, log_per_iter:int):
     diffuser.x0_fn.model.eval()
-    logger.info("Validation:")
+    logger.info("Test:")
     iterator = tqdm(test_loader, desc=name)
     tracker = LogTracker('Rx','Ry','Rz','tx','ty','tz','R','t')
     with iterator:
@@ -73,7 +73,7 @@ def test_diffuser(test_loader:DataLoader, name:str, diffuser:Diffuser, logger:lo
 @torch.inference_mode()
 def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:logging.Logger, device:torch.device, log_per_iter:int, iters:int):
     model.eval()
-    logger.info("Validation:")
+    logger.info("Test:")
     iterator = tqdm(test_loader, desc=name)
     tracker = LogTracker('Rx','Ry','Rz','tx','ty','tz','R','t')
     with iterator:
@@ -85,7 +85,7 @@ def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:log
             gt_se3 = batch['gt'].to(device)  # transform uncalibrated_pcd to calibrated_pcd
             camera_info = batch['camera_info']
             H0 = torch.eye(4).unsqueeze(0).to(gt_se3)
-            model.restore_buffer([img, pcd])
+            model.restore_buffer(img,pcd)
             for _ in range(iters):
                 pcd_tf = se3.transform(H0, pcd)
                 delta_x = model.forward(img, pcd_tf, init_extran, camera_info)
@@ -176,9 +176,9 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', default="cfg/kitti.yml", type=str)
-    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='iterative')
-    parser.add_argument("--iters",type=int,default=10)
+    parser.add_argument('--config', default="cfg/kitti_debug.yml", type=str)
+    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='diffusion')
+    parser.add_argument("--iters",type=int,default=1)
     args = parser.parse_args()
     config = yaml.load(open(args.config,'r'), yaml.SafeLoader)
     main(config, args.config, args.model_type, args.iters)

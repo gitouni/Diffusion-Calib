@@ -137,9 +137,9 @@ def main(config:Dict, config_path:str):
                 init_extran = batch['extran'].to(device)
                 gt_se3 = batch['gt'].to(device)  # transform uncalibrated_pcd to calibrated_pcd
                 camera_info = batch['camera_info']
-                gt_x = se3.log(gt_se3)  # (B, 6)
+                gt_delta_x = se3.log(gt_se3)  # (B, 6)
                 optimizer.zero_grad()
-                loss, x0_hat = diffuser.forward(gt_x, (img, pcd, init_extran, camera_info))
+                loss, x0_hat = diffuser.forward(gt_delta_x, (img, pcd, init_extran, camera_info))
                 if torch.isnan(loss).sum() > 0:
                     logger.warning("nan detected in loss, skip this batch.")
                     continue

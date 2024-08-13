@@ -12,7 +12,9 @@ from torch import Generator, randperm
 from torch.utils.data import Dataset, Subset, BatchSampler
 from typing import Iterable, List, Dict, Union, Optional, Tuple, Sequence
 from models.colmap.io import read_cameras_binary, read_images_binary, CAMERA_TYPE
-from models.tools.cmsc import nptran, CBACorr
+from models.tools.cmsc import nptran
+from models.util.transform import inv_pose_np
+from RANSAC.base import RotEstimator,TslEstimator,RotRANSAC, TslRANSAC
 
 def subset_split(dataset:Dataset, lengths:Sequence[int], seed:Optional[int]=None):
 	"""
@@ -175,25 +177,43 @@ class CustomDataset(Dataset):
         else:
             fx = params_dict['fx']
             fy = params_dict['fy']
-            cx = params_dict['cx']
-            cy = params_dict['cy']
+        cx = params_dict['cx']
+        cy = params_dict['cy']
         image_data = read_images_binary(image_db)
-        assert len(image_data.keys()) == image_files == lidar_files, "image_data ({}), image_files ({}), lidar_files ({})".format(len(image_data.keys()), image_files, lidar_files)
+        assert len(image_data.keys()) == len(image_files) == len(lidar_files), "image_data ({}), image_files ({}), lidar_files ({})".format(len(image_data.keys()), len(image_files), len(lidar_files))
         self.img_files = [os.path.join(image_dir, file) for file in image_files]
         self.lidar_files = [os.path.join(lidar_dir, file) for file in lidar_files]
         self.kpts = [np.load(os.path.join(kpt_dir, file))['keypoints'] for file in kpt_files]
         matches = [np.load(os.path.join(match_dir, file))['match'] for file in sorted(os.listdir(match_dir))]
         self.cam_poses = []
-        for i in range(image_files):
+        for i in range(1,len(image_files)+1):
             img_data = image_data[i]
             extrinsics = np.eye(4)
             extrinsics[:3,:3] = img_data.qvec2rotmat()
             extrinsics[:3,3] = img_data.tvec
             self.cam_poses.append(extrinsics)
         pose_graph = o3d.io.read_pose_graph(lidar_pose)
-        lidar_disp = np.array([np.linalg.norm(node.pose[:3,3]) for node in pose_graph.nodes])
-        camera_disp = np.array([np.linalg.norm(mat[:3,3]) for mat in self.cam_poses])
-        self.scale = np.sum(camera_disp * lidar_disp) / np.sum(camera_disp ** 2)
+        lidar_pose = [inv_pose_np(node.pose) for node in pose_graph.nodes]
+        N = len(pose_graph.nodes)
+        lidar_edge = [src_pose @ inv_pose_np(tgt_pose) for src_pose, tgt_pose in zip(lidar_pose[:-1], lidar_pose[1:])]
+        camera_edge = [src_pose @ inv_pose_np(tgt_pose) for src_pose, tgt_pose in zip(self.cam_poses[:-1], self.cam_poses[1:])]
+        camera_rotedge, lidar_rotedge = map(lambda edge_list:[T[:3,:3] for T in edge_list],[camera_edge, lidar_edge])
+        ransac_state = dict(min_samples=3,
+                                max_trials=5000,
+                                stop_prob=0.99,
+                                random_state=0)
+        ransac_rot_estimator = RotRANSAC(RotEstimator(),
+                                **ransac_state)
+        alpha,beta = map(ransac_rot_estimator.toVecList,[camera_rotedge, lidar_rotedge])
+        best_rot, rot_inlier_mask = ransac_rot_estimator.fit(beta,alpha)
+        ransac_tsl_estimator = TslRANSAC(TslEstimator(best_rot),
+                                     **ransac_state)
+        inlier_camera_edge = [edge for i,edge in enumerate(camera_edge) if rot_inlier_mask[i]]
+        inlier_lidar_edge = [edge for i,edge in enumerate(lidar_edge) if rot_inlier_mask[i]]
+        camera_flatten = ransac_tsl_estimator.flatten(inlier_camera_edge)
+        lidar_flatten = ransac_tsl_estimator.flatten(inlier_lidar_edge)
+        _, best_scale, _ = ransac_tsl_estimator.fit(camera_flatten, lidar_flatten)
+        self.scale = best_scale
         self.pair = json.load(open(pair_file, 'r'))
         self.pair_dict = dict()
         for i, pair in enumerate(self.pair):
@@ -252,8 +272,8 @@ class CustomDataset(Dataset):
                            [0,0,1]])
         image_hw = (self.camera_info['sensor_h'], self.camera_info['sensor_w'])
         cba_data = dict(src_pcd=pcd, src_kpt=self.kpts[index], tgt_kpt_list=tgt_kpt_list, match_list=match_list,
-            src_extran=src_extran, tgt_extran_list=tgt_extran_list, intran=intran, scale=self.scale, image_hw=image_hw)
-        return dict(img=image, pcd=self.tensor_tran(pcd.T), camera_info=self.camera_info, extran=self.gt_Tcl, cba_data=cba_data)
+            src_extran=src_extran, tgt_extran_list=tgt_extran_list, intran=intran, scale=self.scale, img_hw=image_hw)
+        return dict(img=image, pcd=self.tensor_tran(pcd.T), camera_info=self.camera_info, extran=self.tensor_tran(self.gt_Tcl), cba_data=cba_data)
 
 class PerturbCustomDataset(Dataset):
     def __init__(self,dataset:CustomDataset,
@@ -287,8 +307,8 @@ class PerturbCustomDataset(Dataset):
             igt = se3.exp(self.perturb[:,index,:]).squeeze(0)  # (1,6) -> (1,4,4)
             gt = transform.inv_pose(igt).squeeze(0)
         extran = igt @ data['extran']  # add noise to the ground-truth extran
-        new_data = dict(gt=gt, extran=extran, **data)
-        return new_data
+        data.update(dict(gt=gt, extran=extran))  # extran here denotes the perturbed gt extran
+        return data
 
 
 

@@ -31,7 +31,7 @@ def get_dataset(test_dataset_argv:Iterable[Dict]):
 @torch.inference_mode()
 def test_diffuser(test_dataset:Dataset, name:str, diffuser:Diffuser, logger:logging.Logger, device:torch.device, log_per_iter:int):
     diffuser.x0_fn.model.eval()
-    logger.info("Validation:")
+    logger.info("Test:")
     iterator = tqdm(test_dataset, desc=name)
     tracker = LogTracker('Rx','Ry','Rz','tx','ty','tz','R','t')
     with iterator:
@@ -66,11 +66,11 @@ def test_diffuser(test_dataset:Dataset, name:str, diffuser:Diffuser, logger:logg
     assert N_valid > 0, "Fatal Error, no valid batch!"
     return tracker.result(), N_valid / len(test_dataset)
 
-@torch.inference_mode()
+@torch.no_grad()
 def test_diffuser_with_guidance(test_dataset:Dataset, name:str, diffuser:Diffuser, logger:logging.Logger, device:torch.device, log_per_iter:int,
-        classifier_fn_argv:Dict, classifier_t_threshold:float):
+        classifier_fn_argv:Dict, guidance_scale:float, classifier_t_threshold:float):
     diffuser.x0_fn.model.eval()
-    logger.info("Validation:")
+    logger.info("Test:")
     iterator = tqdm(test_dataset, desc=name)
     tracker = LogTracker('Rx','Ry','Rz','tx','ty','tz','R','t')
     with iterator:
@@ -82,7 +82,8 @@ def test_diffuser_with_guidance(test_dataset:Dataset, name:str, diffuser:Diffuse
             gt_se3 = batch['gt'].to(device).unsqueeze(0)  # transform uncalibrated_pcd to calibrated_pcd
             gt_x = se3.log(gt_se3)
             camera_info = batch['camera_info']
-            x0_hat = diffuser.dpm_sampling_with_guidance(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info), batch['corr_data'], classifier_fn_argv, classifier_t_threshold)
+            x0_hat = diffuser.dpm_sampling_with_guidance(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info), batch['cba_data'],
+                classifier_fn_argv, guidance_scale, classifier_t_threshold)
             x0_se3 = se3.exp(x0_hat)
             R_err, t_err = se3_err(x0_se3, gt_se3)
             if torch.isnan(R_err).sum() + torch.isnan(t_err).sum() > 0:
@@ -108,7 +109,7 @@ def test_diffuser_with_guidance(test_dataset:Dataset, name:str, diffuser:Diffuse
 @torch.inference_mode()
 def test_iterative(test_dataset:Dataset, name:str, model:Surrogate, logger:logging.Logger, device:torch.device, log_per_iter:int, iters:int):
     model.eval()
-    logger.info("Validation:")
+    logger.info("Test:")
     iterator = tqdm(test_dataset, desc=name)
     tracker = LogTracker('Rx','Ry','Rz','tx','ty','tz','R','t')
     with iterator:
@@ -120,7 +121,7 @@ def test_iterative(test_dataset:Dataset, name:str, model:Surrogate, logger:loggi
             gt_se3 = batch['gt'].to(device).unsqueeze(0)  # transform uncalibrated_pcd to calibrated_pcd
             camera_info = batch['camera_info']
             H0 = torch.eye(4).unsqueeze(0).to(gt_se3)
-            model.restore_buffer([img, pcd])
+            model.restore_buffer(img, pcd)
             for _ in range(iters):
                 pcd_tf = se3.transform(H0, pcd)
                 delta_x = model.forward(img, pcd_tf, init_extran, camera_info)
@@ -147,20 +148,16 @@ def test_iterative(test_dataset:Dataset, name:str, model:Surrogate, logger:loggi
     assert N_valid > 0, "Fatal Error, no valid batch!"
     return tracker.result(), N_valid / len(test_dataset)
 
-def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative'], iters:int):
+def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative','diffusion-guide'], iters:int):
     np.random.seed(config['seed'])
     torch.manual_seed(config['seed'])
     device = config['device']
+    dataset_argv = config['dataset']['args']
+    name_list, dataset_list = get_dataset(dataset_argv)
     # torch.backends.cudnn.benchmark=True
     # torch.backends.cudnn.enabled = False
     surrogate_model = Surrogate(**config['model']['surrogate']).to(device)
-    denoiser = Denoiser(surrogate_model)
-    diffuser = Diffuser(denoiser, **config['model']['diffuser'])
-    dataset_argv = config['dataset']['test']
-    name_list, dataloader_list = get_dataset(dataset_argv['dataset'], dataset_argv['dataloader'])
-    loss_func = get_loss(config['loss']['type'], **config['loss']['args'])
-    diffuser.set_loss(loss_func)
-    diffuser.set_new_noise_schedule(device)
+    
     run_argv = config['run']
     path_argv = config['path']
     experiment_dir = Path(path_argv['base_dir'])
@@ -192,16 +189,28 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
         raise FileNotFoundError("'pretrain' cannot be set to 'None' during test-time")
     ## training
     record_list = []
-    for name, dataloader in zip(name_list, dataloader_list):
+    if 'diffusion' in model_type:
+        denoiser = Denoiser(surrogate_model)
+        diffuser = Diffuser(denoiser, **config['model']['diffuser'])
+        loss_func = get_loss(config['loss']['type'], **config['loss']['args'])
+        diffuser.set_loss(loss_func)
+        diffuser.set_new_noise_schedule(device)
+        if model_type == 'diffusion-guide':
+            classifier_argv = config['model']['guidance']['argv']
+            classifier_argv['loss_fn'] = get_loss(classifier_argv['loss_fn']['type'], **classifier_argv['loss_fn']['args'])
+            classifier_t_threshold = config['model']['guidance']['t_threshold']
+            guidance_scale = config['model']['guidance']['scale']
+    for name, dataset in zip(name_list, dataset_list):
         surrogate_model.train()
         if model_type == 'diffusion':
-            record, valid_ratio = test_diffuser(dataloader, name, diffuser, logger, device, run_argv['log_per_iter'])
-            logger.info("{}: {} | valid: {:.2%}".format(name, record, valid_ratio))
+            record, valid_ratio = test_diffuser(dataset, name, diffuser, logger, device, run_argv['log_per_iter'])
+        elif model_type == 'diffusion-guide':
+            record, valid_ratio = test_diffuser_with_guidance(dataset, name, diffuser, logger, device, run_argv['log_per_iter'], classifier_argv, guidance_scale, classifier_t_threshold)
         elif model_type == 'iterative':
-            record, valid_ratio = test_iterative(dataloader,name, surrogate_model, logger, device, run_argv['log_per_iter'], iters)
-            logger.info("{}: {} | valid: {:.2%}".format(name, record, valid_ratio))
+            record, valid_ratio = test_iterative(dataset, name, surrogate_model, logger, device, run_argv['log_per_iter'], iters)
         else:
             raise NotImplementedError("Unknown model_type:{}".format(model_type))
+        logger.info("{}: {} | valid: {:.2%}".format(name, record, valid_ratio))
         record_list.append([name, record, valid_ratio])
     logger.info("Summary:")  # view in the bottom
     for name, record, valid_ratio in record_list:
@@ -211,8 +220,8 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', default="cfg/kitti.yml", type=str)
-    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='iterative')
+    parser.add_argument('--config', default="cfg/custom.yml", type=str)
+    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative','diffusion-guide'], default='diffusion-guide')
     parser.add_argument("--iters",type=int,default=10)
     args = parser.parse_args()
     config = yaml.load(open(args.config,'r'), yaml.SafeLoader)
