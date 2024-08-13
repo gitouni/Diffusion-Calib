@@ -7,7 +7,13 @@ from collections.abc import Iterable
 def inv_pose(pose_mat:torch.Tensor):
     inv_pose_mat = pose_mat.clone()
     inv_pose_mat[...,:3,:3] = pose_mat[...,:3,:3].transpose(-1,-2)
-    inv_pose_mat[...,:3,[3]] = torch.bmm(-inv_pose_mat[...,:3,:3], pose_mat[...,:3,[3]])
+    inv_pose_mat[...,:3,[3]] = -inv_pose_mat[...,:3,:3] @ pose_mat[...,:3,[3]]
+    return inv_pose_mat
+
+def inv_pose_np(pose_mat:np.ndarray):
+    inv_pose_mat = pose_mat.copy()
+    inv_pose_mat[...,:3,:3] = pose_mat[...,:3,:3].transpose(-1,-2)
+    inv_pose_mat[...,:3,[3]] = -inv_pose_mat[...,:3,:3] @ pose_mat[...,:3,[3]]
     return inv_pose_mat
 
 class RandomTransformSE3:
@@ -72,27 +78,27 @@ class UniformTransformSE3:
         self.gt = None
         self.igt = None
 
-    def generate_transform(self):
+    def generate_transform(self, num:int=1):
         # return: a twist-vector
         if self.randomly:
-            deg = torch.rand(1).item()*self.max_deg
-            tran = torch.rand(1).item()*self.max_tran
+            deg = torch.rand(num, 1)*self.max_deg
+            tran = torch.rand(num, 1)*self.max_tran
         else:
-            deg = self.max_deg
-            tran = self.max_tran
+            deg = self.max_deg * torch.ones(num, 1)
+            tran = self.max_tran * torch.ones(num, 1)
         amp = deg * PI / 180.0  # deg to rad
-        w = (2*torch.rand(1, 3)-1) * amp
-        t = (2*torch.rand(1, 3)-1) * tran
+        w = (2*torch.rand(num, 3)-1) * amp
+        t = (2*torch.rand(num, 3)-1) * tran
 
         # the output: twist vectors.
         R = so3.exp(w) # (N, 3) --> (N, 3, 3)
-        G = torch.zeros(1, 4, 4)
+        G = torch.zeros(num, 4, 4)
         G[:, 3, 3] = 1
         G[:, 0:3, 0:3] = R
         G[:, 0:3, 3] = t
 
         x = se3.log(G) # --> (N, 6)
-        return x # [1, 6]
+        return x # [N, 6]
 
     def apply_transform(self, p0, x):
         # p0: [3,N] or [6,N]
