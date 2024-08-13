@@ -6,7 +6,7 @@ path:
   log: log
   results: results
   checkpoint: checkpoint
-  resume: null
+  resume: experiments/linear_static/single/checkpoint/best_model.pth
   pretrain: experiments/linear_static/single/checkpoint/best_model.pth
 dataset:
   common_args: &dataset_common_args
@@ -43,40 +43,33 @@ dataset:
       args:
         batch_sampler:
           dataset_len: 128
-          num_samples: 6
+          num_samples: 8
         <<: *dataloader_common_args
       val_args:
         batch_sampler:
           dataset_len: 128
-          num_samples: 6
+          num_samples: 8
         <<: *dataloader_common_args
   test:
     common_main: &test_common_main
       max_deg: 15
       max_tran: 0.1
-      mag_randomly: false
+      mag_randomly: true
     dataset:
-      - name: seq_13
+      - name: seq_05
         base:
-          seqs: ['13']
+          seqs: ['05']
           <<: *dataset_common_args
         main:
           <<: *test_common_main
-          file: cache/kitti/test_13.txt
-      - name: seq_14
+          file: cache/test_05.txt
+      - name: seq_06
         base:
-          seqs: ['14']
+          seqs: ['06']
           <<: *dataset_common_args
         main:
           <<: *test_common_main
-          file: cache/kitti/test_14.txt
-      - name: seq_15
-        base:
-          seqs: ['15']
-          <<: *dataset_common_args
-        main:
-          <<: *test_common_main
-          file: cache/kitti/test_15.txt
+          file: cache/test_06.txt
 
     dataloader:
       batch_size: 32
@@ -137,7 +130,7 @@ scheduler:
     step_size: 5
     gamma: 0.5
 run:
-  n_epoch: 50
+  n_epoch: 100
   val_per_epoch: 5
   log_per_iter: 16
 
