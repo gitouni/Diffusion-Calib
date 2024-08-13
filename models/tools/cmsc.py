@@ -256,17 +256,20 @@ def CBABatchCorr(src_pcd:np.ndarray, src_kpt:np.ndarray,
     proj_func = project_constraint_corr_pts if proj_constraint else project_corr_pts
     raw_src_pcd = nptran(src_pcd, Tcl)  # camera coordinate (source frame)
     corr_data = []
+    inv_src_extran = inv_pose(src_extran)
     for match, tgt_kpt, tgt_extran in zip(match_list, tgt_kpt_list, tgt_extran_list):
-        relpose = src_extran @ inv_pose(tgt_extran)  # Tc1,w x Tw,c2
+        relpose = tgt_extran @ inv_src_extran  # Tc1,w x Tw,c2
         relpose[:3,3] *= scale
         tgt_pcd = nptran(raw_src_pcd, relpose)
         src_proj, _, src_proj_rev = proj_func(raw_src_pcd, tgt_pcd, np.eye(4), intran, img_hw, return_indices=True)
         tree = KDTree(src_proj, leafsize=10)
         dist, ii = tree.query(src_kpt[match[:,0], :], k=1)  # len of src_kpt
         dist_rev = dist < max_dist ** 2
+        if dist_rev.sum() == 0:
+            continue  # skip this data
         ii = ii[dist_rev]  # indices of src_pcd[src_rev]
         matched_tgt_kpt = tgt_kpt[match[:,1],:][dist_rev]
-        matched_src_pcd = raw_src_pcd[src_proj_rev][ii]
+        matched_src_pcd = src_pcd[src_proj_rev][ii]
         corr_data.append(dict(src_pcd=matched_src_pcd,
             tgt_kpt=matched_tgt_kpt, relpose=relpose))
     return corr_data

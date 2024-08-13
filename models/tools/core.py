@@ -50,10 +50,11 @@ class Encoder3D(nn.Module):
     
 class Encoder2D(ResNet):
     def __init__(self, depth:Literal[18, 34, 50, 101, 152]=18, out_chan_list:List[int]=[64, 96, 128, 192], pretrained=None):
-        # MMCV, please shut up
+        # for debugging purposes, please comment the following lines.
         from mmcv.utils.logging import get_logger
         get_logger('root').setLevel(logging.ERROR)
         get_logger('mmcv').setLevel(logging.ERROR)
+        get_logger('mmengine').setLevel(logging.ERROR)
         super().__init__(
             depth=depth,
             init_cfg=dict(
