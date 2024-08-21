@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 import math
-from typing import Literal
+from typing import Literal, Optional
 
 
 class NoiseScheduleVP:
@@ -179,7 +179,8 @@ def model_wrapper(
     guidance_scale=1.,
     classifier_fn=None,
     classifier_kwargs={},
-    classifier_t_threshold:float=1.0
+    classifier_t_threshold:float=1.0,
+    classifier_grad_place_holder:Optional[torch.Tensor]=None,
 ):
     """Create a wrapper function for the noise prediction model.
 
@@ -313,10 +314,13 @@ def model_wrapper(
         """
         with torch.enable_grad():
             x_in = x.detach().requires_grad_(True)
-            log_prob = classifier_fn(x_in, t_input, condition, **classifier_kwargs)
+            log_prob = classifier_fn(x_in, t_input, condition, **classifier_kwargs).mean()
             if not isinstance(log_prob, torch.Tensor):
                 return torch.zeros_like(x_in)
-            return torch.autograd.grad(log_prob, x_in)  
+            grad = torch.autograd.grad(log_prob, x_in)[0]
+            if classifier_grad_place_holder is not None:
+                grad[...,~classifier_grad_place_holder] = 0
+            return grad
     def model_fn(x, t_continuous):
         """
         The noise predicition model function that is used for DPM-Solver.
@@ -324,13 +328,15 @@ def model_wrapper(
         if guidance_type == "uncond":
             return noise_pred_fn(x, t_continuous)
         elif guidance_type == "classifier":
-            if t_continuous > classifier_t_threshold:
+            if t_continuous.min() > classifier_t_threshold:
                 return noise_pred_fn(x, t_continuous)
             assert classifier_fn is not None
             t_input = get_model_input_time(t_continuous)
             cond_grad = cond_grad_fn(x, t_input)
             sigma_t = noise_schedule.marginal_std(t_continuous)
             noise = noise_pred_fn(x, t_continuous)
+            # amp_noise = torch.abs(noise).max()
+            # cond_grad = torch.clamp(cond_grad, -0.3*amp_noise, 0.3*amp_noise)
             return noise - guidance_scale * expand_dims(sigma_t, x.dim()) * cond_grad
         elif guidance_type == "classifier-free":
             if guidance_scale == 1. or unconditional_condition is None:

@@ -9,8 +9,9 @@ from typing import Union, Tuple, Literal, Iterable, Dict, Callable, Optional
 from .util import se3
 from .denoiser import Denoiser
 from .dpm import NoiseScheduleVP, DPM_Solver, model_wrapper
-from .tools.cmsc import CBABatchCorr
+from .tools.cmsc import CBABatchCorr, CABatchCorr
 from .tools.utils import project_pc2image
+from .util.transform import inv_pose
 
 def exists(x):
 	return x is not None
@@ -243,7 +244,7 @@ class Diffuser(BaseNetwork):
 	
 
 	@torch.inference_mode()
-	def dpm_sampling(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]) -> torch.Tensor:
+	def dpm_sampling(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict], return_intermediate:bool=False) -> torch.Tensor:
 		def model_fn(x_t:torch.Tensor, t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]):
 			out = self.x0_fn.forward(x_t, x_cond)
 			# If the model outputs both 'mean' and 'variance' (such as improved-DDPM and guided-diffusion),
@@ -264,15 +265,73 @@ class Diffuser(BaseNetwork):
 			noise_schedule,
 			algorithm_type="dpmsolver++"
 		)
-		x_0_hat = dpm_solver.sample(
-			x_T,
-			**self.dpm_argv
-		)
-		self.x0_fn.clear_buffer()
-		return x_0_hat
+		if return_intermediate:
+			x_0_hat, intermidates = dpm_solver.sample(
+				x_T,
+				**self.dpm_argv,
+				return_intermediate=True
+			)
+			self.x0_fn.clear_buffer()
+			return x_0_hat, intermidates
+		else:
+			x_0_hat = dpm_solver.sample(
+				x_T,
+				**self.dpm_argv,
+				return_intermediate=False
+			)
+			self.x0_fn.clear_buffer()
+			return x_0_hat
 	
 	@torch.no_grad()
-	def dpm_sampling_with_guidance(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict], corr_data:Dict[str,np.ndarray], classifier_fn_argv:Dict, guidance_scale:float, classifier_t_threshold:float) -> torch.Tensor:
+	def dpm_sampling_guidance(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict],
+			classifier_fn_argv:Dict, classifer_fn:Callable, return_intermediate:bool=False) -> torch.Tensor:
+		def model_fn(x_t:torch.Tensor, t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]):
+			out = self.x0_fn.forward(x_t, x_cond)
+			# If the model outputs both 'mean' and 'variance' (such as improved-DDPM and guided-diffusion),
+			# We only use the 'mean' output for DPM-Solver, because DPM-Solver is based on diffusion ODEs.
+			return out
+		def classifier_fn_wrapper(x_t:torch.Tensor, t:torch.Tensor, condition:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]):
+			log_prob = classifer_fn(x_cond[0],x_cond[1], se3.exp(x_t) @ x_cond[2], x_cond[3])
+			return log_prob
+		self.x0_fn.clear_buffer()
+		self.x0_fn.restore_buffer(x_cond[:2])  # img, pcd, init_Tcl, camera_info
+		noise_schedule = NoiseScheduleVP(schedule='discrete', alphas_cumprod=self.gammas)
+		model_fn_continuous = model_wrapper(
+			model_fn,
+			noise_schedule,
+			model_kwargs={"x_cond":x_cond},
+			model_type='x_start',
+			guidance_type='classifier',
+			classifier_fn=classifier_fn_wrapper,
+			classifier_kwargs=dict(x_cond=x_cond),
+			**classifier_fn_argv
+		)
+		dpm_solver = DPM_Solver(
+			model_fn_continuous,
+			noise_schedule,
+			algorithm_type="dpmsolver++"
+		)
+		if return_intermediate:
+			x_0_hat, intermidates = dpm_solver.sample(
+				x_T,
+				**self.dpm_argv,
+				return_intermediate=True
+			)
+			self.x0_fn.clear_buffer()
+			return x_0_hat, intermidates
+		else:
+			x_0_hat = dpm_solver.sample(
+				x_T,
+				**self.dpm_argv,
+				return_intermediate=False
+			)
+			self.x0_fn.clear_buffer()
+			return x_0_hat
+
+
+	@torch.no_grad()
+	def dpm_sampling_with_guidance(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict], cba_data:Dict[str,np.ndarray], ca_data:Dict[str,np.ndarray], classifier_fn_argv:Dict, guidance_scale:float, classifier_t_threshold:float,
+			classifier_grad_place_holder:Optional[Iterable]=None, return_intermediate:bool=False) -> torch.Tensor:
 		# x_cond: img, pcd, Tcl, camera_info
 		def model_fn(x_t:torch.Tensor, t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]):
 			out = self.x0_fn.forward(x_t, x_cond)
@@ -285,7 +344,8 @@ class Diffuser(BaseNetwork):
 		self.x0_fn.clear_buffer()
 		self.x0_fn.restore_buffer(x_cond[:2])  # img, pcd, init_Tcl, camera_info
 		noise_schedule = NoiseScheduleVP(schedule='discrete', alphas_cumprod=self.gammas)
-		classifer_guidance = GuidanceSampler(**classifier_fn_argv, corr_data=corr_data)
+		classifer_guidance = GuidanceSampler(**classifier_fn_argv, cba_data=cba_data, ca_data=ca_data)
+		place_holder = torch.tensor(classifier_grad_place_holder, dtype=torch.bool) if classifier_grad_place_holder is not None else None
 		model_fn_continuous = model_wrapper(
 			model_fn,
 			noise_schedule,
@@ -295,19 +355,30 @@ class Diffuser(BaseNetwork):
 			guidance_scale=guidance_scale,
 			classifier_fn=classifier_fn_wrapper,
 			classifier_kwargs=dict(init_gt=x_cond[-2], camera_info=x_cond[-1]),
-			classifier_t_threshold=classifier_t_threshold
+			classifier_t_threshold=classifier_t_threshold,
+			classifier_grad_place_holder=place_holder
 		)
 		dpm_solver = DPM_Solver(
 			model_fn_continuous,
 			noise_schedule,
 			algorithm_type="dpmsolver++"
 		)
-		x_0_hat = dpm_solver.sample(
-			x_T,
-			**self.dpm_argv
-		)
-		self.x0_fn.clear_buffer()
-		return x_0_hat
+		if return_intermediate:
+			x_0_hat, intermidates = dpm_solver.sample(
+				x_T,
+				**self.dpm_argv,
+				return_intermediate=True
+			)
+			self.x0_fn.clear_buffer()
+			return x_0_hat, intermidates
+		else:
+			x_0_hat = dpm_solver.sample(
+				x_T,
+				**self.dpm_argv,
+				return_intermediate=False
+			)
+			self.x0_fn.clear_buffer()
+			return x_0_hat
 
 	def forward(self, x_0:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, Dict], noise=None) -> torch.Tensor:
 		"""Training `theta`(x_t, t) = `epsilon_0`
@@ -331,32 +402,53 @@ class Diffuser(BaseNetwork):
 		x_0_hat = self.x0_fn.forward(x_t, x_cond)  # img, pcd, init_Tcl, camera_info
 		loss = self.loss_fn(x_0_hat, x_0)
 		return loss, x_0_hat
-	
+
+
+
 class GuidanceSampler:
-	def __init__(self, loss_fn:Callable, corr_data:Dict, max_corr_dist:float, proj_constraint:bool=True):
-		corr_data.update({"max_dist":max_corr_dist, "proj_constraint":proj_constraint})
-		self.corr_data = corr_data
+	def __init__(self, loss_fn:Callable, cba_data:Dict, ca_data:Dict, cba_argv:Dict, ca_argv:Dict):
+		self.cba_data = cba_data
+		self.ca_data = ca_data
+		self.cba_data.update(cba_argv)
+		self.ca_data.update(ca_argv)
 		self.loss = loss_fn
+		self.pcd_tran = lambda x,dev: torch.from_numpy(x).to(dev).transpose(-1,-2).unsqueeze(0)
 
 	def classifer_fn(self, se3_x:torch.Tensor, init_gt:torch.Tensor, camera_info:Dict):
 		delta_se3 = se3.exp(se3_x)
 		se3_extran = delta_se3 @ init_gt # (1,4,4)
+		se3_invextran = inv_pose(se3_extran)
 		Tcl = se3_extran.squeeze(0).cpu().detach().numpy()
 		assert np.ndim(Tcl) == 2, 'classifer guidances can only handle batch = 1, get {}'.format(Tcl.shape[0])
-		corr_res_list = CBABatchCorr(**self.corr_data, Tcl=Tcl)
-		if len(corr_res_list) == 0:
+		cba_res = CBABatchCorr(**self.cba_data, Tcl=Tcl)
+		ca_res = CABatchCorr(**self.ca_data, Tcl=Tcl)
+		if len(cba_res) == 0 and len(ca_res) == 0:
 			return 0
 		loss = 0
-		for corr_res in corr_res_list:
-			relpose = torch.from_numpy(corr_res['relpose']).to(se3_x).unsqueeze(0)  # (1, 4, 4)
-			src_pcd = torch.from_numpy(corr_res['src_pcd']).to(se3_x).transpose(-1,-2).unsqueeze(0)  # (1, 3, N)
-			src_pcd = se3.transform(se3_extran, src_pcd)
-			tgt_pcd = se3.transform(relpose, src_pcd)
-			tgt_proj = project_pc2image(tgt_pcd, camera_info)  # (1, 2, N)
-			tgt_kpt = torch.from_numpy(corr_res['tgt_kpt']).to(se3_x).transpose(-1,-2).unsqueeze(0) # (1, 2, N)
-			frame_loss = self.loss(tgt_proj, tgt_kpt)
-			loss += frame_loss
-		loss /= len(corr_res_list)
+		# CBA Guidance
+		# for corr_res in cba_res:
+		# 	relpose = torch.from_numpy(corr_res['relpose']).to(se3_x).unsqueeze(0)  # (1, 4, 4)
+		# 	src_pcd = self.pcd_tran(corr_res['src_pcd'], se3_x)  # (1, 3, N)
+		# 	src_pcd = se3.transform(se3_extran, src_pcd)
+		# 	tgt_pcd = se3.transform(relpose, src_pcd)
+		# 	tgt_proj = project_pc2image(tgt_pcd, camera_info)  # (1, 2, N)
+		# 	tgt_kpt = self.pcd_tran(corr_res['tgt_kpt'], se3_x) # (1, 2, N)
+		# 	tgt_err = torch.sum((tgt_proj - tgt_kpt)**2, dim=1)**0.5
+		# 	frame_loss = self.loss(tgt_err, torch.zeros_like(tgt_err))
+		# 	loss += frame_loss
+		# loss /= len(cba_res)
+		# CA Guidance
+		src_pt_campt = self.pcd_tran(ca_res['src_pt_campt'], se3_x)  # (1, 3, N)
+		src_pl_campt = self.pcd_tran(ca_res['src_pl_campt'], se3_x)  # (1, 3, N)
+		src_pt_campt = se3.transform(se3_invextran, src_pt_campt)
+		src_pl_campt = se3.transform(se3_invextran, src_pl_campt)
+		src_pt_pcd = self.pcd_tran(ca_res['src_pt_pcd'], se3_x)  # (1, 3, N)
+		src_pl_pcd = self.pcd_tran(ca_res['src_pl_pcd'], se3_x)  # (1, 3, N)
+		src_pl_norm = self.pcd_tran(ca_res['src_pl_norm'], se3_x)  # (1, 3, N)
+		pt_err = torch.sum((src_pt_pcd - src_pt_campt)**2, dim=1)**0.5
+		pl_err = torch.abs(torch.sum((src_pl_pcd - src_pl_campt) * src_pl_norm, dim=1))
+		err = torch.cat([pt_err, pl_err], dim=-1)
+		loss += self.loss(err, torch.zeros_like(err))
 		return -loss
 
 	@staticmethod

@@ -5,12 +5,12 @@ class DiffusionScheduler(torch.nn.Module):
     def __init__(self, argv:Dict):
         super().__init__()
         self.num_steps = argv['n_diff_steps']
-        self.beta_1 = argv['beta_1']
-        self.beta_T = argv['beta_T']
         self.mode = argv['schedule_type']
 
         if self.mode == 'linear':
-            betas = torch.linspace(self.beta_1, self.beta_T, steps=self.num_steps)
+            beta_1 = argv['beta_1']
+            beta_T = argv['beta_T']
+            betas = torch.linspace(beta_1, beta_T, steps=self.num_steps)
         elif self.mode == 'cosine':
             def betas_fn(s):
                 T = self.num_steps
