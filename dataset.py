@@ -11,7 +11,7 @@ from PIL import Image
 from torch import Generator, randperm
 from torch.utils.data import Dataset, Subset, BatchSampler
 from typing import Iterable, List, Dict, Union, Optional, Tuple, Sequence
-from models.colmap.io import read_cameras_binary, read_images_binary, CAMERA_TYPE
+from models.colmap.io import read_model, CAMERA_TYPE
 from models.tools.cmsc import nptran
 from models.util.transform import inv_pose_np
 from RANSAC.base import RotEstimator,TslEstimator,RotRANSAC, TslRANSAC
@@ -119,9 +119,8 @@ class KITTIBatchSampler(BatchSampler):
     def __iter__(self):
         for _ in range(self.dataset_len):
             # number per sequence
-            seq_idx = np.random.choice(self.num_sequences)
-            file_indices = np.random.choice(self.len_of_sequences[seq_idx], self.num_samples)
-            batches = [(seq_idx, file_idx) for file_idx in file_indices]
+            seq_indices = np.random.choice(self.num_sequences, self.num_samples, replace=True)
+            batches = [(seq_idx, np.random.choice(self.len_of_sequences[seq_idx], 1).item()) for seq_idx in seq_indices]
             yield batches
 
     def __len__(self):
@@ -160,16 +159,18 @@ class KITTISeqBatchSampler(BatchSampler):
     def __len__(self):
         return self.dataset_len
 
-class CustomDataset(Dataset):
-    def __init__(self, gt_Tcl:str, image_dir:str, lidar_dir:str, lidar_pose:str, camera_db:str, image_db:str,
-             pair_file:str, kpt_dir:str, match_dir:str, max_frame_corr:int, resize_size:Optional[Tuple[int,int]]=None,
+class CBADataset(Dataset):
+    def __init__(self, gt_Tcl:str, image_dir:str, lidar_dir:str, lidar_pose:str, model_dir:str,
+             pair_file:str, kpt_dir:str, match_dir:str, max_frame_corr:int,
              filter_params:Optional[Dict[str,float]]=None, pcd_sample_num:int=-1
              ):
         self.gt_Tcl = np.loadtxt(gt_Tcl)
         image_files = sorted(os.listdir(image_dir))
         lidar_files = sorted(os.listdir(lidar_dir))
         kpt_files = sorted(os.listdir(kpt_dir))
-        camera_data = read_cameras_binary(camera_db)[1]
+        cameras, images, points3d = read_model(model_dir, '.bin')
+        camera_id = cameras.keys().__iter__().__next__()
+        camera_data = cameras[camera_id]
         assert camera_data.model in CAMERA_TYPE.keys(), 'Unknown camera type:{}'.format(camera_data.model)
         params_dict = {key: value for key, value in zip(CAMERA_TYPE[camera_data.model], camera_data.params)}
         if 'f' in params_dict:
@@ -179,19 +180,25 @@ class CustomDataset(Dataset):
             fy = params_dict['fy']
         cx = params_dict['cx']
         cy = params_dict['cy']
-        image_data = read_images_binary(image_db)
-        assert len(image_data.keys()) == len(image_files) == len(lidar_files), "image_data ({}), image_files ({}), lidar_files ({})".format(len(image_data.keys()), len(image_files), len(lidar_files))
+        assert len(images.keys()) == len(image_files) == len(lidar_files), "images ({}), image_files ({}), lidar_files ({})".format(len(images.keys()), len(image_files), len(lidar_files))
         self.img_files = [os.path.join(image_dir, file) for file in image_files]
         self.lidar_files = [os.path.join(lidar_dir, file) for file in lidar_files]
         self.kpts = [np.load(os.path.join(kpt_dir, file))['keypoints'] for file in kpt_files]
         matches = [np.load(os.path.join(match_dir, file))['match'] for file in sorted(os.listdir(match_dir))]
         self.cam_poses = []
+        self.cam_mappoints = []
         for i in range(1,len(image_files)+1):
-            img_data = image_data[i]
+            img_data = images[i]
             extrinsics = np.eye(4)
             extrinsics[:3,:3] = img_data.qvec2rotmat()
             extrinsics[:3,3] = img_data.tvec
             self.cam_poses.append(extrinsics)
+            point3d_ids = img_data.point3D_ids
+            point3d_valid_mask = np.nonzero(point3d_ids != -1)[0]
+            point3d_ids = point3d_ids[point3d_valid_mask]
+            mapppoints = np.stack([points3d[idx].xyz for idx in point3d_ids], axis=0)
+            mapppoints = nptran(mapppoints, extrinsics)  # frame coordinate system
+            self.cam_mappoints.append(mapppoints)
         pose_graph = o3d.io.read_pose_graph(lidar_pose)
         lidar_pose = [inv_pose_np(node.pose) for node in pose_graph.nodes]
         N = len(pose_graph.nodes)
@@ -226,18 +233,8 @@ class CustomDataset(Dataset):
             if tgt_idx not in self.pair_dict.keys():
                 self.pair_dict[tgt_idx] = []
             self.pair_dict[tgt_idx].append([src_idx, matches[i][:,::-1]])  # swap source and target
-        if resize_size is not None:
-            self.img_tran = Tf.Compose([
-                Tf.ToTensor(),
-                Tf.Resize(resize_size)])
-            fx = resize_size[1] * fx
-            cx = resize_size[1] * cx
-            fy = resize_size[0] * fy
-            cy = resize_size[0] * cy
-            self.image_shape = resize_size
-        else:
-            self.img_tran = Tf.ToTensor()
-            self.image_shape = [camera_data.height, camera_data.width]
+        self.img_tran = Tf.ToTensor()
+        self.image_shape = [camera_data.height, camera_data.width]
         self.pcd_tran = KITTIFilter(**filter_params) if filter_params else lambda x:x
         self.resample_tran = Resampler(pcd_sample_num)
         self.camera_info = {
@@ -273,10 +270,125 @@ class CustomDataset(Dataset):
         image_hw = (self.camera_info['sensor_h'], self.camera_info['sensor_w'])
         cba_data = dict(src_pcd=pcd, src_kpt=self.kpts[index], tgt_kpt_list=tgt_kpt_list, match_list=match_list,
             src_extran=src_extran, tgt_extran_list=tgt_extran_list, intran=intran, scale=self.scale, img_hw=image_hw)
-        return dict(img=image, pcd=self.tensor_tran(pcd.T), camera_info=self.camera_info, extran=self.tensor_tran(self.gt_Tcl), cba_data=cba_data)
+        ca_data = dict(cam_mappoint=self.cam_mappoints[index], pcd=pcd, scale=self.scale)
+        return dict(img=image, pcd=self.tensor_tran(pcd.T), camera_info=self.camera_info, extran=self.tensor_tran(self.gt_Tcl), cba_data=cba_data, ca_data=ca_data)
 
-class PerturbCustomDataset(Dataset):
-    def __init__(self,dataset:CustomDataset,
+# class FlowDataset(Dataset):
+#     def __init__(self, gt_Tcl:str, image_dir:str, lidar_dir:str, lidar_pose:str, model_dir:str,
+#              pair_file:str, flow_dir:str, filter_params:Optional[Dict[str,float]]=None, pcd_sample_num:int=-1
+#              ):
+#         self.gt_Tcl = np.loadtxt(gt_Tcl)
+#         image_files = sorted(os.listdir(image_dir))
+#         lidar_files = sorted(os.listdir(lidar_dir))
+#         flow_files = sorted(os.listdir(flow_dir))
+#         cameras, images, points3d = read_model(model_dir, '.bin')
+#         camera_id = cameras.keys().__iter__().__next__()
+#         camera_data = cameras[camera_id]
+#         assert camera_data.model in CAMERA_TYPE.keys(), 'Unknown camera type:{}'.format(camera_data.model)
+#         params_dict = {key: value for key, value in zip(CAMERA_TYPE[camera_data.model], camera_data.params)}
+#         if 'f' in params_dict:
+#             fx = fy = params_dict['f']
+#         else:
+#             fx = params_dict['fx']
+#             fy = params_dict['fy']
+#         cx = params_dict['cx']
+#         cy = params_dict['cy']
+#         assert len(images.keys()) == len(image_files) == len(lidar_files), "images ({}), image_files ({}), lidar_files ({})".format(len(images.keys()), len(image_files), len(lidar_files))
+#         self.img_files = [os.path.join(image_dir, file) for file in image_files]
+#         self.lidar_files = [os.path.join(lidar_dir, file) for file in lidar_files]
+#         self.kpts = [np.load(os.path.join(kpt_dir, file))['keypoints'] for file in kpt_files]
+#         matches = [np.load(os.path.join(match_dir, file))['match'] for file in sorted(os.listdir(match_dir))]
+#         self.cam_poses = []
+#         self.cam_mappoints = []
+#         for i in range(1,len(image_files)+1):
+#             img_data = images[i]
+#             extrinsics = np.eye(4)
+#             extrinsics[:3,:3] = img_data.qvec2rotmat()
+#             extrinsics[:3,3] = img_data.tvec
+#             self.cam_poses.append(extrinsics)
+#             point3d_ids = img_data.point3D_ids
+#             point3d_valid_mask = np.nonzero(point3d_ids != -1)[0]
+#             point3d_ids = point3d_ids[point3d_valid_mask]
+#             mapppoints = np.stack([points3d[idx].xyz for idx in point3d_ids], axis=0)
+#             mapppoints = nptran(mapppoints, extrinsics)  # frame coordinate system
+#             self.cam_mappoints.append(mapppoints)
+#         pose_graph = o3d.io.read_pose_graph(lidar_pose)
+#         lidar_pose = [inv_pose_np(node.pose) for node in pose_graph.nodes]
+#         N = len(pose_graph.nodes)
+#         lidar_edge = [src_pose @ inv_pose_np(tgt_pose) for src_pose, tgt_pose in zip(lidar_pose[:-1], lidar_pose[1:])]
+#         camera_edge = [src_pose @ inv_pose_np(tgt_pose) for src_pose, tgt_pose in zip(self.cam_poses[:-1], self.cam_poses[1:])]
+#         camera_rotedge, lidar_rotedge = map(lambda edge_list:[T[:3,:3] for T in edge_list],[camera_edge, lidar_edge])
+#         ransac_state = dict(min_samples=3,
+#                                 max_trials=5000,
+#                                 stop_prob=0.99,
+#                                 random_state=0)
+#         ransac_rot_estimator = RotRANSAC(RotEstimator(),
+#                                 **ransac_state)
+#         alpha,beta = map(ransac_rot_estimator.toVecList,[camera_rotedge, lidar_rotedge])
+#         best_rot, rot_inlier_mask = ransac_rot_estimator.fit(beta,alpha)
+#         ransac_tsl_estimator = TslRANSAC(TslEstimator(best_rot),
+#                                      **ransac_state)
+#         inlier_camera_edge = [edge for i,edge in enumerate(camera_edge) if rot_inlier_mask[i]]
+#         inlier_lidar_edge = [edge for i,edge in enumerate(lidar_edge) if rot_inlier_mask[i]]
+#         camera_flatten = ransac_tsl_estimator.flatten(inlier_camera_edge)
+#         lidar_flatten = ransac_tsl_estimator.flatten(inlier_lidar_edge)
+#         _, best_scale, _ = ransac_tsl_estimator.fit(camera_flatten, lidar_flatten)
+#         self.scale = best_scale
+#         self.pair = json.load(open(pair_file, 'r'))
+#         self.pair_dict = dict()
+#         for i, pair in enumerate(self.pair):
+#             src_idx, tgt_idx = pair
+#             if tgt_idx - src_idx > max_frame_corr:
+#                 continue
+#             if src_idx not in self.pair_dict.keys():
+#                 self.pair_dict[src_idx] = []
+#             self.pair_dict[src_idx].append([tgt_idx, matches[i]])
+#             if tgt_idx not in self.pair_dict.keys():
+#                 self.pair_dict[tgt_idx] = []
+#             self.pair_dict[tgt_idx].append([src_idx, matches[i][:,::-1]])  # swap source and target
+#         self.img_tran = Tf.ToTensor()
+#         self.image_shape = [camera_data.height, camera_data.width]
+#         self.pcd_tran = KITTIFilter(**filter_params) if filter_params else lambda x:x
+#         self.resample_tran = Resampler(pcd_sample_num)
+#         self.camera_info = {
+#             "fx": fx,
+#             "fy": fy,
+#             "cx": cx,
+#             "cy": cy,
+#             "sensor_h": camera_data.height,
+#             "sensor_w": camera_data.width,
+#             "projection_mode": "perspective"
+#         }
+#         self.tensor_tran = lambda x:torch.from_numpy(x).to(torch.float32)
+#     def __len__(self):
+#         return len(self.img_files)
+
+#     def __getitem__(self, index:int):
+#         image = self.img_tran(Image.open(self.img_files[index]))
+#         pcd = np.load(self.lidar_files[index])
+#         pcd_rev = pcd[:,0] > 0
+#         pcd = self.pcd_tran(pcd[pcd_rev,:])
+#         pcd = self.resample_tran(pcd)  # (N, 3)
+#         match_list = []
+#         tgt_kpt_list = []
+#         src_extran = self.cam_poses[index]
+#         tgt_extran_list = []
+#         for tgt_idx, matches in self.pair_dict[index]:
+#             match_list.append(matches)
+#             tgt_kpt_list.append(self.kpts[tgt_idx])
+#             tgt_extran_list.append(self.cam_poses[tgt_idx])
+#         intran = np.array([[self.camera_info['fx'],0,self.camera_info['cx']],
+#                            [0,self.camera_info['fy'],self.camera_info['cy']],
+#                            [0,0,1]])
+#         image_hw = (self.camera_info['sensor_h'], self.camera_info['sensor_w'])
+#         cba_data = dict(src_pcd=pcd, src_kpt=self.kpts[index], tgt_kpt_list=tgt_kpt_list, match_list=match_list,
+#             src_extran=src_extran, tgt_extran_list=tgt_extran_list, intran=intran, scale=self.scale, img_hw=image_hw)
+#         ca_data = dict(cam_mappoint=self.cam_mappoints[index], pcd=pcd, scale=self.scale)
+#         return dict(img=image, pcd=self.tensor_tran(pcd.T), camera_info=self.camera_info, extran=self.tensor_tran(self.gt_Tcl), cba_data=cba_data, ca_data=ca_data)
+
+
+class PerturbDataset(Dataset):
+    def __init__(self,dataset:Dataset,
                  max_deg:float,
                  max_tran:float,
                  mag_randomly=True,
@@ -408,15 +520,19 @@ class BaseKITTIDataset(Dataset):
             "sensor_w": RW,
             "projection_mode": "perspective"
         }
-        return dict(img=_img,pcd=_pcd, camera_info=camera_info, ExTran=T_cam2velo)
+        return dict(img=_img,pcd=_pcd, camera_info=camera_info, extran=T_cam2velo)
     
     @staticmethod
     def collate_fn(zipped_x:Iterable[Dict[str, Union[torch.Tensor, Dict]]]):
         batch = dict()
         batch['img'] = torch.stack([x['img'] for x in zipped_x])
         batch['pcd'] = torch.stack([x['pcd'] for x in zipped_x])
-        batch['Extran'] = torch.stack([x['Extran'] for x in zipped_x])
+        batch['extran'] = torch.stack([x['extran'] for x in zipped_x])
         batch['camera_info'] = zipped_x[0]['camera_info']
+        batch['camera_info']['fx'] = torch.tensor([x['camera_info']['fx'] for x in zipped_x], dtype=torch.float32)
+        batch['camera_info']['fy'] = torch.tensor([x['camera_info']['fy'] for x in zipped_x], dtype=torch.float32)
+        batch['camera_info']['cx'] = torch.tensor([x['camera_info']['cx'] for x in zipped_x], dtype=torch.float32)
+        batch['camera_info']['cy'] = torch.tensor([x['camera_info']['cy'] for x in zipped_x], dtype=torch.float32)
         return batch
         
 class PertubKITTIDataset(Dataset):
@@ -448,7 +564,7 @@ class PertubKITTIDataset(Dataset):
             total_index = self.dataset.sumsep[group_idx] + sub_index
         else:
             total_index = index
-        extran = data['ExTran']  # (4,4)
+        extran = data['extran']  # (4,4)
         if self.file is None:  # randomly generate igt
             igt_x = self.transform.generate_transform(1)
             igt = se3.exp(igt_x).squeeze(0)
@@ -468,6 +584,10 @@ class PertubKITTIDataset(Dataset):
         batch['extran'] = torch.stack([x['extran'] for x in zipped_x])
         batch['gt'] = torch.stack([x['gt'] for x in zipped_x])
         batch['camera_info'] = zipped_x[0]['camera_info']
+        batch['camera_info']['fx'] = torch.tensor([x['camera_info']['fx'] for x in zipped_x], dtype=torch.float32)
+        batch['camera_info']['fy'] = torch.tensor([x['camera_info']['fy'] for x in zipped_x], dtype=torch.float32)
+        batch['camera_info']['cx'] = torch.tensor([x['camera_info']['cx'] for x in zipped_x], dtype=torch.float32)
+        batch['camera_info']['cy'] = torch.tensor([x['camera_info']['cy'] for x in zipped_x], dtype=torch.float32)
         return batch
     
 class PertubSeqKITTIDataset(Dataset):

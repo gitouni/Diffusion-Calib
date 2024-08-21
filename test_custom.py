@@ -4,7 +4,7 @@ import numpy as np
 import argparse
 import torch
 from torch.utils.data import Dataset
-from dataset import CustomDataset, PerturbCustomDataset
+from dataset import CBADataset, PerturbDataset
 from models.denoiser import Surrogate, Denoiser
 from models.diffuser import Diffuser
 from models.loss import se3_err, get_loss
@@ -15,7 +15,7 @@ from core.logger import LogTracker
 from core.tools import load_checkpoint_model_only
 import logging
 from pathlib import Path
-from typing import Dict, Literal, Iterable
+from typing import Dict, Literal, Iterable, Optional
 
 
 def get_dataset(test_dataset_argv:Iterable[Dict]):
@@ -23,13 +23,16 @@ def get_dataset(test_dataset_argv:Iterable[Dict]):
     dataset_list = []
     for dataset_argv in test_dataset_argv:
         name_list.append(dataset_argv['name'])
-        base_dataset = CustomDataset(**dataset_argv['base'])
-        dataset = PerturbCustomDataset(base_dataset, **dataset_argv['main'])
+        base_dataset = CBADataset(**dataset_argv['base'])
+        dataset = PerturbDataset(base_dataset, **dataset_argv['main'])
         dataset_list.append(dataset)
     return name_list, dataset_list
 
+def to_npy(x0:torch.Tensor) -> np.ndarray:
+    return x0.squeeze(0).detach().cpu().numpy()
+
 @torch.inference_mode()
-def test_diffuser(test_dataset:Dataset, name:str, diffuser:Diffuser, logger:logging.Logger, device:torch.device, log_per_iter:int):
+def test_diffuser(test_dataset:Dataset, name:str, diffuser:Diffuser, logger:logging.Logger, device:torch.device, log_per_iter:int, res_dir:Path):
     diffuser.x0_fn.model.eval()
     logger.info("Test:")
     iterator = tqdm(test_dataset, desc=name)
@@ -43,7 +46,9 @@ def test_diffuser(test_dataset:Dataset, name:str, diffuser:Diffuser, logger:logg
             gt_se3 = batch['gt'].to(device).unsqueeze(0)  # transform uncalibrated_pcd to calibrated_pcd
             gt_x = se3.log(gt_se3)
             camera_info = batch['camera_info']
-            x0_hat = diffuser.dpm_sampling(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info))
+            x0_hat, x0_list = diffuser.dpm_sampling(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info), return_intermediate=True)
+            x0_list = [to_npy(se3.log(se3.exp(x0) @ init_extran)) for x0 in x0_list]
+            np.savetxt(res_dir.joinpath("%06d.txt"%i), np.array(x0_list))
             x0_se3 = se3.exp(x0_hat)
             R_err, t_err = se3_err(x0_se3, gt_se3)
             if torch.isnan(R_err).sum() + torch.isnan(t_err).sum() > 0:
@@ -67,8 +72,8 @@ def test_diffuser(test_dataset:Dataset, name:str, diffuser:Diffuser, logger:logg
     return tracker.result(), N_valid / len(test_dataset)
 
 @torch.no_grad()
-def test_diffuser_with_guidance(test_dataset:Dataset, name:str, diffuser:Diffuser, logger:logging.Logger, device:torch.device, log_per_iter:int,
-        classifier_fn_argv:Dict, guidance_scale:float, classifier_t_threshold:float):
+def test_diffuser_with_guidance(test_dataset:Dataset, name:str, diffuser:Diffuser, logger:logging.Logger, device:torch.device, log_per_iter:int, res_dir:Path,
+        classifier_fn_argv:Dict, guidance_scale:float, classifier_t_threshold:float, classifier_grad_place_holder:Optional[Iterable]=None):
     diffuser.x0_fn.model.eval()
     logger.info("Test:")
     iterator = tqdm(test_dataset, desc=name)
@@ -82,9 +87,11 @@ def test_diffuser_with_guidance(test_dataset:Dataset, name:str, diffuser:Diffuse
             gt_se3 = batch['gt'].to(device).unsqueeze(0)  # transform uncalibrated_pcd to calibrated_pcd
             gt_x = se3.log(gt_se3)
             camera_info = batch['camera_info']
-            x0_hat = diffuser.dpm_sampling_with_guidance(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info), batch['cba_data'],
-                classifier_fn_argv, guidance_scale, classifier_t_threshold)
+            x0_hat, x0_list = diffuser.dpm_sampling_with_guidance(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info), batch['cba_data'],  batch['ca_data'],
+                classifier_fn_argv, guidance_scale, classifier_t_threshold, classifier_grad_place_holder, return_intermediate=True)
             x0_se3 = se3.exp(x0_hat)
+            x0_list = [to_npy(se3.log(se3.exp(x0) @ init_extran)) for x0 in x0_list]
+            np.savetxt(res_dir.joinpath("%06d.txt"%i), np.array(x0_list))
             R_err, t_err = se3_err(x0_se3, gt_se3)
             if torch.isnan(R_err).sum() + torch.isnan(t_err).sum() > 0:
                 logger.warn("nan value detected, skip this batch.")
@@ -107,7 +114,7 @@ def test_diffuser_with_guidance(test_dataset:Dataset, name:str, diffuser:Diffuse
     return tracker.result(), N_valid / len(test_dataset)
 
 @torch.inference_mode()
-def test_iterative(test_dataset:Dataset, name:str, model:Surrogate, logger:logging.Logger, device:torch.device, log_per_iter:int, iters:int):
+def test_iterative(test_dataset:Dataset, name:str, model:Surrogate, logger:logging.Logger, device:torch.device, log_per_iter:int, res_dir:Path, iters:int):
     model.eval()
     logger.info("Test:")
     iterator = tqdm(test_dataset, desc=name)
@@ -122,10 +129,14 @@ def test_iterative(test_dataset:Dataset, name:str, model:Surrogate, logger:loggi
             camera_info = batch['camera_info']
             H0 = torch.eye(4).unsqueeze(0).to(gt_se3)
             model.restore_buffer(img, pcd)
+            x0_list = []
             for _ in range(iters):
                 pcd_tf = se3.transform(H0, pcd)
                 delta_x = model.forward(img, pcd_tf, init_extran, camera_info)
                 H0 = se3.exp(delta_x) @ H0
+                save_x = to_npy(se3.log(H0 @ init_extran))  # (6,)
+                x0_list.append(save_x)
+            np.savetxt(res_dir.joinpath("%06d.txt"%i), np.array(x0_list))
             model.clear_buffer()
             R_err, t_err = se3_err(H0, gt_se3)
             if torch.isnan(R_err).sum() + torch.isnan(t_err).sum() > 0:
@@ -166,6 +177,8 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
     experiment_dir.mkdir(exist_ok=True)
     checkpoints_dir = experiment_dir.joinpath(path_argv['checkpoint'])
     checkpoints_dir.mkdir(exist_ok=True)
+    result_dir = experiment_dir.joinpath(path_argv['results']).joinpath(model_type)
+    result_dir.mkdir(exist_ok=True, parents=True)
     log_dir = experiment_dir.joinpath(path_argv['log'])
     log_dir.mkdir(exist_ok=True)
     shutil.copyfile(config_path, str(log_dir.joinpath(os.path.basename(config_path))))  # copy the config file
@@ -174,7 +187,7 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger_mode = 'w'
-    steps = config['model']['diffuser']['dpm_argv']['steps'] if model_type == 'diffusion' else iters
+    steps = config['model']['diffuser']['dpm_argv']['steps'] if 'diffusion' in model_type else iters
     file_handler = logging.FileHandler(str(log_dir) + '/test_{}_{}.log'.format(model_type, steps), mode=logger_mode)
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
@@ -199,15 +212,18 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
             classifier_argv = config['model']['guidance']['argv']
             classifier_argv['loss_fn'] = get_loss(classifier_argv['loss_fn']['type'], **classifier_argv['loss_fn']['args'])
             classifier_t_threshold = config['model']['guidance']['t_threshold']
+            classifier_grad_place_holder = config['model']['guidance']['grad_place_holder']
             guidance_scale = config['model']['guidance']['scale']
     for name, dataset in zip(name_list, dataset_list):
         surrogate_model.train()
+        res_dir = result_dir.joinpath(name)
+        res_dir.mkdir(exist_ok=True, parents=True)
         if model_type == 'diffusion':
-            record, valid_ratio = test_diffuser(dataset, name, diffuser, logger, device, run_argv['log_per_iter'])
+            record, valid_ratio = test_diffuser(dataset, name, diffuser, logger, device, run_argv['log_per_iter'], res_dir)
         elif model_type == 'diffusion-guide':
-            record, valid_ratio = test_diffuser_with_guidance(dataset, name, diffuser, logger, device, run_argv['log_per_iter'], classifier_argv, guidance_scale, classifier_t_threshold)
+            record, valid_ratio = test_diffuser_with_guidance(dataset, name, diffuser, logger, device, run_argv['log_per_iter'], res_dir, classifier_argv, guidance_scale, classifier_t_threshold, classifier_grad_place_holder)
         elif model_type == 'iterative':
-            record, valid_ratio = test_iterative(dataset, name, surrogate_model, logger, device, run_argv['log_per_iter'], iters)
+            record, valid_ratio = test_iterative(dataset, name, surrogate_model, logger, device, run_argv['log_per_iter'], res_dir, iters)
         else:
             raise NotImplementedError("Unknown model_type:{}".format(model_type))
         logger.info("{}: {} | valid: {:.2%}".format(name, record, valid_ratio))
@@ -220,9 +236,9 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', default="cfg/custom.yml", type=str)
-    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative','diffusion-guide'], default='diffusion-guide')
-    parser.add_argument("--iters",type=int,default=10)
+    parser.add_argument('--config', default="cfg/custom_main.yml", type=str)
+    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative','diffusion-guide'], default='diffusion')
+    parser.add_argument("--iters",type=int,default=1)
     args = parser.parse_args()
     config = yaml.load(open(args.config,'r'), yaml.SafeLoader)
     main(config, args.config, args.model_type, args.iters)
