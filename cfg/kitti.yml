@@ -1,13 +1,13 @@
-seed: 2514
+seed: 0
 device: cuda:0
 path:
-  name: single
-  base_dir: experiments/linear/
+  name: main
+  base_dir: experiments/resize/
   log: log
   results: results
   checkpoint: checkpoint
   resume: null
-  pretrain: experiments/linear_static/single/checkpoint/best_model.pth
+  pretrain: &pretrained_model experiments/resize/main/checkpoint/best_model.pth
 dataset:
   common_args: &dataset_common_args
     basedir: ./data/kitti/
@@ -15,14 +15,14 @@ dataset:
     meta_json: 'data_len.json'
     skip_frame: 1
     voxel_size: 0.15
-    pcd_sample_num: 4096
-    resize_size: null
+    pcd_sample_num: 8192
+    resize_size: [256, 512]
     extend_ratio: [2.5, 2.5]
   train:
     dataset:
       train:
         base:
-          seqs: ['00','01','02','03','04','07','08']
+          seqs: ['00','02','03','04','05','06','07','08','10','12']
           <<: *dataset_common_args
         main: &train_main
           max_deg: 15
@@ -30,7 +30,7 @@ dataset:
           mag_randomly: false
       val:
         base:
-          seqs: ['05','06']
+          seqs: ['16','17','18']
           <<: *dataset_common_args
         main:
           max_deg: 15
@@ -42,13 +42,13 @@ dataset:
         pin_memory: true
       args:
         batch_sampler:
-          dataset_len: 128
-          num_samples: 6
+          dataset_len: 256
+          num_samples: 12
         <<: *dataloader_common_args
       val_args:
         batch_sampler:
           dataset_len: 128
-          num_samples: 6
+          num_samples: 12
         <<: *dataloader_common_args
   test:
     common_main: &test_common_main
@@ -77,28 +77,36 @@ dataset:
         main:
           <<: *test_common_main
           file: cache/kitti/test_15.txt
+      - name: seq_21
+        base:
+          seqs: ['21']
+          <<: *dataset_common_args
+        main:
+          <<: *test_common_main
+          file: cache/kitti/test_21.txt
 
     dataloader:
-      batch_size: 32
+      batch_size: 16
       shuffle: false
       drop_last: false
       pin_memory: true
-      num_workers: 8
+      num_workers: 6
 model:
   surrogate:
-    hidden_dims: [128, 128, 128, 128]
+    hidden_dims: [128, 128]
     x_dim: 6
     encoder_argv:
       resnet_depth: 18
-      resnet_pretrained: pretrained/resnet18-5c106cde.pth
+      resnet_pretrained: true
       encoder_2d_chans: [64, 96, 128, 192]
       encoder_3d_chans: [64, 96, 128, 192]
-      pcd_pyramid: [2048, 1024, 512]
+      pcd_pyramid: [4096, 2048, 1024]
+      fusion_knn: 5
   diffuser:
     beta_schedule:
-      schedule: linear
+      schedule: cosine
       n_timestep: 1000
-      linear_start: 1.0E-4
+      linear_start: 2.0E-4
       linear_end: 0.02
     dpm_argv:
       steps: 10
@@ -108,17 +116,34 @@ model:
       lower_order_final: false
       denoise_to_zero: false
       solver_type: dpmsolver
-      atol: 0.005
+      atol: 0.0078
       rtol: 0.05
-  guidance:
+  probnet:
     argv:
-      loss_fn:
-        type: mae
-        args:
-          reduction: mean
-      max_corr_dist: 1.5
-      proj_constraint: true
-    t_threshold: 0.5
+      hidden_dims: [128, 128, 128]
+      encoder_argv:
+        resnet_depth: 18
+        resnet_pretrained: true
+        encoder_2d_chans: [64, 96, 128, 192]
+        encoder_3d_chans: [64, 96, 128, 192]
+        pcd_pyramid: [2048, 1024, 512]
+      pretrained_encoder: *pretrained_model
+      freeze_encoder: true
+    cls_argv:
+      guidance_scale: 1.0
+      classifier_t_threshold: 0.5
+      classifier_grad_place_holder: null
+    mlp_pretrained: experiments/prob/single/checkpoint/best_model.pth
+
+  # guidance:
+  #   argv:
+  #     loss_fn:
+  #       type: mae
+  #       args:
+  #         reduction: mean
+  #     max_corr_dist: 1.5
+  #     proj_constraint: true
+  #   t_threshold: 0.5
 
 loss:
   type: mae
@@ -127,7 +152,7 @@ loss:
 
 optimizer:
   args:
-    lr: 5.0E-4
+    lr: 2.0E-4
     betas: [0.9, 0.999]
   max_grad: 1.0
 
@@ -135,7 +160,7 @@ scheduler:
   type: step
   args:
     step_size: 5
-    gamma: 0.5
+    gamma: 0.7
 run:
   n_epoch: 50
   val_per_epoch: 5
