@@ -10,7 +10,6 @@ from .util import se3
 from .denoiser import Denoiser
 from .dpm import NoiseScheduleVP, DPM_Solver, model_wrapper
 from .tools.cmsc import CBABatchCorr, CABatchCorr
-from .tools.utils import project_pc2image
 from .util.transform import inv_pose
 
 def exists(x):
