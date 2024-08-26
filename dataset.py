@@ -5,6 +5,7 @@ from PIL import Image
 from torchvision.transforms import transforms as Tf
 import numpy as np
 import pykitti
+from nuscenes.nuscenes import NuScenes
 import open3d as o3d
 from models.util import transform, se3
 from PIL import Image
@@ -15,6 +16,8 @@ from models.colmap.io import read_model, CAMERA_TYPE
 from models.tools.cmsc import nptran
 from models.util.transform import inv_pose_np
 from RANSAC.base import RotEstimator,TslEstimator,RotRANSAC, TslRANSAC
+IMAGENET_MEAN=[0.485, 0.456, 0.406]
+IMAGENET_STD=[0.229, 0.224, 0.225]
 
 def subset_split(dataset:Dataset, lengths:Sequence[int], seed:Optional[int]=None):
 	"""
@@ -45,7 +48,7 @@ def check_length(root:str,save_name='data_len.json'):
         json.dump(dict_len,f)
         
 class KITTIFilter:
-    def __init__(self, voxel_size=0.3, min_dist:float=0.15):
+    def __init__(self, voxel_size:Optional[float]=None, min_dist:float=0.15, skip_point:int=1):
         """KITTIFilter
 
         Args:
@@ -54,15 +57,22 @@ class KITTIFilter:
         """
         self.voxel_size = voxel_size
         self.min_dist = min_dist
+        self.skip_point = skip_point
         
     def __call__(self, x:np.ndarray):
+        if self.skip_point > 1:
+            x = x[::self.skip_point,:]
         rev_x = np.linalg.norm(x, axis=1) > self.min_dist
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(x[rev_x,:])
+        
         # _, ind = pcd.remove_radius_outlier(nb_points=self.n_neighbor, radius=self.voxel_size)
         # pcd.select_by_index(ind)
-        pcd = pcd.voxel_down_sample(self.voxel_size)
-        pcd_xyz = np.array(pcd.points,dtype=np.float32)
+        if self.voxel_size is not None:
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(x[rev_x,:])
+            pcd = pcd.voxel_down_sample(self.voxel_size)
+            pcd_xyz = np.array(pcd.points,dtype=np.float32)
+        else:
+            pcd_xyz = x[rev_x,:]
         return pcd_xyz
 
 class Resampler:
@@ -233,7 +243,9 @@ class CBADataset(Dataset):
             if tgt_idx not in self.pair_dict.keys():
                 self.pair_dict[tgt_idx] = []
             self.pair_dict[tgt_idx].append([src_idx, matches[i][:,::-1]])  # swap source and target
-        self.img_tran = Tf.ToTensor()
+        self.img_tran = Tf.Compose([
+             Tf.ToTensor(),
+             Tf.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
         self.image_shape = [camera_data.height, camera_data.width]
         self.pcd_tran = KITTIFilter(**filter_params) if filter_params else lambda x:x
         self.resample_tran = Resampler(pcd_sample_num)
@@ -427,7 +439,7 @@ class PerturbDataset(Dataset):
 class BaseKITTIDataset(Dataset):
     def __init__(self,basedir:str,
                  seqs:List[str]=['09','10'], cam_id:int=2,
-                 meta_json='data_len.json', skip_frame=1,
+                 meta_json:str='data_len.json', skip_frame:int=1, skip_point:int=1,
                  voxel_size=0.15, min_dist=0.15, pcd_sample_num=8192,
                  resize_size:Optional[Tuple[int,int]]=None, extend_ratio=(2.5,2.5),
                  ):
@@ -452,13 +464,11 @@ class BaseKITTIDataset(Dataset):
         self.sumsep = np.cumsum(self.sep)
         self.resample_tran = Resampler(pcd_sample_num)
         self.tensor_tran = lambda x:torch.from_numpy(x).to(torch.float32)
+        img_tran = [Tf.ToTensor(), Tf.Normalize(IMAGENET_MEAN, IMAGENET_STD)]
         if self.resize_size is not None:
-            self.img_tran = Tf.Compose([
-                Tf.ToTensor(),
-                Tf.Resize(self.resize_size)])
-        else:
-            self.img_tran = Tf.ToTensor()
-        self.pcd_tran = KITTIFilter(voxel_size, min_dist)
+            img_tran.append(Tf.Resize(self.resize_size))
+        self.img_tran = Tf.Compose(img_tran)
+        self.pcd_tran = KITTIFilter(voxel_size, min_dist, skip_point)
         self.extend_ratio = extend_ratio
         
     def __len__(self):
@@ -626,6 +636,12 @@ class PertubSeqKITTIDataset(Dataset):
         batch['camera_info'] = zipped_x[0]['camera_info']
         return batch
 
+class NuSceneDataset(Dataset):
+    def __init__(self) -> None:
+        nusc = NuScenes(version='v1.0-mini', dataroot='data/nuScenes', verbose=True)
+        my_sample = nusc.sample[100]
+        nusc.render_pointcloud_in_image(my_sample['token'], pointsensor_channel='LIDAR_TOP')
+        super().__init__()
         
         
 if __name__ == "__main__":

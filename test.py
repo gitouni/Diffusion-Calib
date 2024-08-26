@@ -5,7 +5,7 @@ import argparse
 import torch
 from torch.utils.data import DataLoader
 from dataset import BaseKITTIDataset, PertubKITTIDataset
-from models.denoiser import Surrogate, Denoiser, ProbNet
+from models.denoiser import Denoiser, Surrogate, __classdict__ as DenoiserDict
 from models.diffuser import Diffuser
 from models.loss import se3_err, get_loss
 from tqdm import tqdm
@@ -79,49 +79,49 @@ def test_diffuser(test_loader:DataLoader, name:str, diffuser:Diffuser, logger:lo
     return tracker.result(), N_valid / len(test_loader)
 
 
-@torch.no_grad()
-def test_diffuser_guidance(test_loader:DataLoader, name:str, diffuser:Diffuser, classifer:ProbNet, classifier_fn_argv:Dict, logger:logging.Logger, device:torch.device, log_per_iter:int, res_dir:Path):
-    diffuser.x0_fn.model.eval()
-    logger.info("Test:")
-    iterator = tqdm(test_loader, desc=name)
-    tracker = LogTracker('Rx','Ry','Rz','tx','ty','tz','R','t')
-    cnt = 0
-    with iterator:
-        N_valid = len(test_loader)
-        for i, batch in enumerate(test_loader):
-            img = batch['img'].to(device)
-            pcd = batch['pcd'].to(device)
-            init_extran = batch['extran'].to(device)
-            gt_se3 = batch['gt'].to(device)  # transform uncalibrated_pcd to calibrated_pcd
-            gt_x = se3.log(gt_se3)
-            camera_info = batch['camera_info']
-            x0_hat, x0_list = diffuser.dpm_sampling_guidance(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info), classifier_fn_argv, classifer.single_foward, return_intermediate=True)
-            x0_list = [to_npy(se3.log(se3.exp(x0) @ init_extran)) for x0 in x0_list]
-            batched_x0_list = np.stack(x0_list, axis=1)  # (B, K, 6)
-            for x0 in batched_x0_list:
-                np.savetxt(res_dir.joinpath("%06d.txt"%cnt), x0)
-                cnt += 1
-            x0_se3 = se3.exp(x0_hat)
-            R_err, t_err = se3_err(x0_se3, gt_se3)
-            if torch.isnan(R_err).sum() + torch.isnan(t_err).sum() > 0:
-                logger.warn("nan value detected, skip this batch.")
-                N_valid -= 1
-                continue
-            batch_n = len(gt_se3)
-            tracker.update('Rx',torch.mean(R_err[:,0].abs()).item(), batch_n)
-            tracker.update('Ry',torch.mean(R_err[:,1].abs()).item(), batch_n)
-            tracker.update('Rz',torch.mean(R_err[:,2].abs()).item(), batch_n)
-            tracker.update('tx',torch.mean(t_err[:,0].abs()).item(), batch_n)
-            tracker.update('ty',torch.mean(t_err[:,1].abs()).item(), batch_n)
-            tracker.update('tz',torch.mean(t_err[:,2].abs()).item(), batch_n)
-            tracker.update('R',torch.linalg.norm(R_err, dim=1).mean().item(), batch_n)
-            tracker.update('t',torch.linalg.norm(t_err, dim=1).mean().item(), batch_n)
-            iterator.set_postfix(tracker.result())
-            iterator.update(1)
-            if (i+1) % log_per_iter == 0:
-                logger.info("\tBatch:{}|{}: {}".format(i+1, len(test_loader), tracker.result()))
-    assert N_valid > 0, "Fatal Error, no valid batch!"
-    return tracker.result(), N_valid / len(test_loader)
+# @torch.no_grad()
+# def test_diffuser_guidance(test_loader:DataLoader, name:str, diffuser:Diffuser, classifer:ProbNet, classifier_fn_argv:Dict, logger:logging.Logger, device:torch.device, log_per_iter:int, res_dir:Path):
+#     diffuser.x0_fn.model.eval()
+#     logger.info("Test:")
+#     iterator = tqdm(test_loader, desc=name)
+#     tracker = LogTracker('Rx','Ry','Rz','tx','ty','tz','R','t')
+#     cnt = 0
+#     with iterator:
+#         N_valid = len(test_loader)
+#         for i, batch in enumerate(test_loader):
+#             img = batch['img'].to(device)
+#             pcd = batch['pcd'].to(device)
+#             init_extran = batch['extran'].to(device)
+#             gt_se3 = batch['gt'].to(device)  # transform uncalibrated_pcd to calibrated_pcd
+#             gt_x = se3.log(gt_se3)
+#             camera_info = batch['camera_info']
+#             x0_hat, x0_list = diffuser.dpm_sampling_guidance(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info), classifier_fn_argv, classifer.single_foward, return_intermediate=True)
+#             x0_list = [to_npy(se3.log(se3.exp(x0) @ init_extran)) for x0 in x0_list]
+#             batched_x0_list = np.stack(x0_list, axis=1)  # (B, K, 6)
+#             for x0 in batched_x0_list:
+#                 np.savetxt(res_dir.joinpath("%06d.txt"%cnt), x0)
+#                 cnt += 1
+#             x0_se3 = se3.exp(x0_hat)
+#             R_err, t_err = se3_err(x0_se3, gt_se3)
+#             if torch.isnan(R_err).sum() + torch.isnan(t_err).sum() > 0:
+#                 logger.warn("nan value detected, skip this batch.")
+#                 N_valid -= 1
+#                 continue
+#             batch_n = len(gt_se3)
+#             tracker.update('Rx',torch.mean(R_err[:,0].abs()).item(), batch_n)
+#             tracker.update('Ry',torch.mean(R_err[:,1].abs()).item(), batch_n)
+#             tracker.update('Rz',torch.mean(R_err[:,2].abs()).item(), batch_n)
+#             tracker.update('tx',torch.mean(t_err[:,0].abs()).item(), batch_n)
+#             tracker.update('ty',torch.mean(t_err[:,1].abs()).item(), batch_n)
+#             tracker.update('tz',torch.mean(t_err[:,2].abs()).item(), batch_n)
+#             tracker.update('R',torch.linalg.norm(R_err, dim=1).mean().item(), batch_n)
+#             tracker.update('t',torch.linalg.norm(t_err, dim=1).mean().item(), batch_n)
+#             iterator.set_postfix(tracker.result())
+#             iterator.update(1)
+#             if (i+1) % log_per_iter == 0:
+#                 logger.info("\tBatch:{}|{}: {}".format(i+1, len(test_loader), tracker.result()))
+#     assert N_valid > 0, "Fatal Error, no valid batch!"
+#     return tracker.result(), N_valid / len(test_loader)
 
 @torch.inference_mode()
 def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:logging.Logger, device:torch.device, log_per_iter:int, res_dir:Path, iters:int):
@@ -180,7 +180,7 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
     device = config['device']
     # torch.backends.cudnn.benchmark=True
     # torch.backends.cudnn.enabled = False
-    surrogate_model = Surrogate(**config['model']['surrogate']).to(device)
+    surrogate_model = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
     denoiser = Denoiser(surrogate_model)
     dataset_argv = config['dataset']['test']
     name_list, dataloader_list = get_dataloader(dataset_argv['dataset'], dataset_argv['dataloader'])
@@ -189,10 +189,10 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
         loss_func = get_loss(config['loss']['type'], **config['loss']['args'])
         diffuser.set_loss(loss_func)
         diffuser.set_new_noise_schedule(device)
-        if model_type == 'diffusion-guidance':
-            probnet = ProbNet(**config['model']['probnet']['argv']).to(device)
-            probnet.mlp.load_state_dict(torch.load(config['model']['probnet']['mlp_pretrained'])['model'])
-            classifier_fn_argv = config['model']['probnet']['cls_argv']
+        # if model_type == 'diffusion-guidance':
+        #     probnet = ProbNet(**config['model']['probnet']['argv']).to(device)
+        #     probnet.mlp.load_state_dict(torch.load(config['model']['probnet']['mlp_pretrained'])['model'])
+        #     classifier_fn_argv = config['model']['probnet']['cls_argv']
     run_argv = config['run']
     path_argv = config['path']
     experiment_dir = Path(path_argv['base_dir'])
@@ -233,8 +233,8 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
             record, valid_ratio = test_diffuser(dataloader, name, diffuser, logger, device, run_argv['log_per_iter'], res_dir)
         elif model_type == 'iterative':
             record, valid_ratio = test_iterative(dataloader,name, surrogate_model, logger, device, run_argv['log_per_iter'], res_dir, iters)
-        elif model_type == 'diffusion-guidance':
-            record, valid_ratio = test_diffuser_guidance(dataloader, name, diffuser, probnet, classifier_fn_argv, logger, device, run_argv['log_per_iter'], res_dir)
+        # elif model_type == 'diffusion-guidance':
+        #     record, valid_ratio = test_diffuser_guidance(dataloader, name, diffuser, probnet, classifier_fn_argv, logger, device, run_argv['log_per_iter'], res_dir)
         else:
             raise NotImplementedError("Unknown model_type:{}".format(model_type))
         logger.info("{}: {} | valid: {:.2%}".format(name, record, valid_ratio))
@@ -248,7 +248,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default="cfg/kitti.yml", type=str)
-    parser.add_argument('--model_type',type=str, choices=['diffusion','diffusion-guidance','iterative'], default='diffusion')
+    parser.add_argument('--model_type',type=str, choices=['diffusion','diffusion-guidance','iterative'], default='iterative')
     parser.add_argument("--iters",type=int,default=1)
     args = parser.parse_args()
     config = yaml.load(open(args.config,'r'), yaml.SafeLoader)

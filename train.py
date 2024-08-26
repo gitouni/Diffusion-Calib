@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.utils
 from torch.utils.data import DataLoader
 from dataset import BaseKITTIDataset, PertubKITTIDataset, KITTIBatchSampler
-from models.denoiser import Surrogate, Denoiser
+from models.denoiser import Denoiser, __classdict__ as DenoiserDict
 from models.diffuser import Diffuser
 from models.lr_scheduler import get_lr_scheduler
 from models.loss import get_loss, geodesic_loss
@@ -61,6 +61,8 @@ def val_epoch(val_loader:DataLoader, diffuser:Diffuser, logger:logging.Logger, d
             if torch.isnan(R_loss).sum() + torch.isnan(t_loss).sum() + torch.isnan(loss).sum() > 0:
                 logger.warning("nan value detected, skip this batch.")
                 N_valid -= 1
+                iterator.set_postfix(state='nan')
+                iterator.update(1)
                 continue
             total_loss += loss
             tracker.update('R',R_loss.item())
@@ -81,7 +83,7 @@ def main(config:Dict, config_path:str):
     device = config['device']
     # torch.backends.cudnn.benchmark=True
     # torch.backends.cudnn.enabled = False
-    surrogate_model = Surrogate(**config['model']['surrogate']).to(device)
+    surrogate_model = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
     denoiser = Denoiser(surrogate_model)
     diffuser = Diffuser(denoiser, **config['model']['diffuser'])
     dataset_argv = config['dataset']['train']
@@ -142,6 +144,8 @@ def main(config:Dict, config_path:str):
                 loss, x0_hat = diffuser.forward(gt_delta_x, (img, pcd, init_extran, camera_info))
                 if torch.isnan(loss).sum() > 0:
                     logger.warning("nan detected in loss, skip this batch.")
+                    iterator.set_postfix(state='nan')
+                    iterator.update(1)
                     continue
                 loss.backward()
                 nn.utils.clip_grad_norm_(diffuser.x0_fn.model.parameters(), max_norm=clip_grad, norm_type=2)  # avoid gradient explosion
