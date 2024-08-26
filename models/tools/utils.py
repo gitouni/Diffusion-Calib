@@ -5,6 +5,11 @@ from typing import List
 from .csrc import k_nearest_neighbor, furthest_point_sampling
 
 
+def se3_transform(g: torch.Tensor, pcd: torch.Tensor):
+    # g : SE(3),  * x 4 x 4
+    # a : R^3,    * x 3[x N]
+    return g[...,:3,:3] @ pcd + g[...,:3,[3]]
+
 class InputPadder:
     def __init__(self, dims, x=8):
         self.ht, self.wd = dims[-2:]
@@ -247,39 +252,48 @@ def resize_to_64x(inputs, target, x=64):
     return inputs, target
 
 
-def project_pc2image(pc, camera_info):
-    assert pc.shape[1] == 3  # channel first
-    batch_size = pc.shape[0]
+def project_pc2image(pc:torch.Tensor, camera_info):
+    assert pc.shape[-2] == 3  # channel first
+    assert pc.ndim == 3 or pc.ndim == 4
+    ndim = pc.ndim
+    # batch_size = pc.shape[0]
 
     if isinstance(camera_info['cx'], torch.Tensor):
-        cx = camera_info['cx'][:, None].expand([batch_size, 1])
-        cy = camera_info['cy'][:, None].expand([batch_size, 1])
+        cx = camera_info['cx'][:, None].to(pc)  # (B,1)
+        cy = camera_info['cy'][:, None].to(pc)  # (B,1)
+        if ndim == 4:
+            cx = cx[...,None]  # (B, 1, 1)
+            cy = cy[...,None]  # (B, 1, 1)
     else:
         cx = camera_info['cx']
         cy = camera_info['cy']
 
     if camera_info['projection_mode'] == 'perspective':
         if isinstance(camera_info['fx'], torch.Tensor):
-            fx = camera_info['fx'][:, None].expand([batch_size, 1])
+            fx = camera_info['fx'][:, None].to(pc)  # (B,1)
+            if ndim == 4:
+                fx = fx[...,None]  # (B, 1, 1)
         else:
             fx = camera_info['fx']
         if isinstance(camera_info['fy'], torch.Tensor):
-            fy = camera_info['fy'][:, None].expand([batch_size, 1])
+            fy = camera_info['fy'][:, None].to(pc)  # (B,1)
+            if ndim == 4:
+                fy = fy[...,None]  # (B, 1, 1)
         else:
             fy = camera_info['fy']
-        pc_x, pc_y, pc_z = pc[:, 0, :], pc[:, 1, :], pc[:, 2, :]
+        pc_x, pc_y, pc_z = pc[..., 0, :], pc[..., 1, :], pc[..., 2, :]
         image_x = cx + (fx / pc_z) * pc_x
         image_y = cy + (fy / pc_z) * pc_y
     elif camera_info['projection_mode'] == 'parallel':
-        image_x = pc[:, 0, :] + cx
-        image_y = pc[:, 1, :] + cy
+        image_x = pc[..., 0, :] + cx
+        image_y = pc[..., 1, :] + cy
     else:
         raise NotImplementedError
 
     return torch.cat([
-        image_x[:, None, :],
-        image_y[:, None, :],
-    ], dim=1)  # (B, 2, N)
+        image_x[..., None, :],
+        image_y[..., None, :],
+    ], dim=-2)  # (B, 2, N) or (B, K, 2, N)
 
 
 @torch.cuda.amp.autocast(enabled=False)

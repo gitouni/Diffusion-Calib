@@ -1,8 +1,15 @@
-from .utils import k_nearest_neighbor, project_pc2image
 import numpy as np
 from scipy.spatial import KDTree
 from typing import Tuple, Iterable, List, Dict
 from scipy.spatial.transform import Rotation
+import open3d as o3d
+from scipy.spatial import KDTree, cKDTree
+
+def inv_pose_np(pose_mat:np.ndarray):
+    inv_pose_mat = pose_mat.copy()
+    inv_pose_mat[...,:3,:3] = pose_mat[...,:3,:3].transpose(-1,-2)
+    inv_pose_mat[...,:3,[3]] = -inv_pose_mat[...,:3,:3] @ pose_mat[...,:3,[3]]
+    return inv_pose_mat
 
 def skew(x:np.ndarray):
     return np.array([[0,-x[2],x[1]],
@@ -72,6 +79,8 @@ def toVecR(SE3:np.ndarray):
     """
     return toVecRSplit(SE3[:3,:3], SE3[:3,3])
 
+def toMatTotal(vec:np.ndarray):
+    return toMat(vec[...,:3], vec[...,3:])
 
 def toMat(rvec:np.ndarray, tvec:np.ndarray):
     """rvec and tvec to SE3 Matrix
@@ -196,6 +205,29 @@ def project_constraint_corr_pts(src_pcd_corr:np.ndarray, tgt_pcd_corr:np.ndarray
     else:
         return src_proj_pts, tgt_proj_pts
 
+
+def estimate_normal(pcd_arr:np.ndarray, radius:float=0.6, knn:int=15):
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(pcd_arr)
+    pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius, knn))
+    return np.array(pcd.normals)
+
+def dist2pt(pcd_arr:np.ndarray, pcd_norm:np.ndarray, pcd_tree:cKDTree, mappoint:np.ndarray, k:int=10, max_pt_err:float=0.5, max_norm_err:float=0.04, min_cnt:int=30):
+    dist, ii = pcd_tree.query(mappoint, k=k, workers=-1)
+    dist_rev = dist[:,0] < max_pt_err ** 2
+    dist = dist[dist_rev]
+    ii = ii[dist_rev]
+    if len(ii) < min_cnt:
+        return min_cnt - len(ii), None, None
+    pcd_xyz_top1 = pcd_arr[ii[:,0]]  # (n, 3)
+    pcd_norm_top1 = pcd_norm[ii[:,0]] # (n, 3)
+    pcd_nn = pcd_arr[ii.reshape(-1)].reshape(ii.shape[0], ii.shape[1], 3)  # (n, k, 3)
+    k = pcd_nn.shape[1]
+    norm_reg = np.sum(np.abs((pcd_xyz_top1[:,None,:] - pcd_nn) * pcd_norm_top1[:,None,:]), axis=-1)  # (n, k)
+    plane_rev = np.mean(norm_reg, axis=1) < max_norm_err
+    err = np.where(plane_rev, np.abs(np.sum((mappoint[dist_rev] - pcd_xyz_top1) * pcd_norm_top1, axis=-1)), np.sqrt(dist[:, 0]))
+    return err, dist_rev, ii[:,0]
+
 def CBACorr(src_pcd:np.ndarray, src_kpt:np.ndarray,
         src_extran:np.ndarray, tgt_extran:np.ndarray,
         intran:np.ndarray, Tcl:np.ndarray, scale:float, img_hw:Tuple[int,int],
@@ -272,4 +304,27 @@ def CBABatchCorr(src_pcd:np.ndarray, src_kpt:np.ndarray,
         matched_src_pcd = src_pcd[src_proj_rev][ii]
         corr_data.append(dict(src_pcd=matched_src_pcd,
             tgt_kpt=matched_tgt_kpt, relpose=relpose))
+    return corr_data
+
+def CABatchCorr(cam_mappoint:np.ndarray, pcd:np.ndarray,
+                 Tcl:np.ndarray, scale:float, max_dist:float,
+                 normal_radius:float=0.6, noraml_knn:int=10, ca_knn:int = 10, norm_reg_err:float = 0.04):
+    transformed_mappoint = nptran(cam_mappoint * scale, inv_pose_np(Tcl))
+    pcd_norm = estimate_normal(pcd, normal_radius, noraml_knn)
+    pcd_tree = KDTree(pcd, leafsize=100)
+    dist, ii = pcd_tree.query(transformed_mappoint, k=ca_knn)
+    dist_rev = dist[:,0] < max_dist ** 2
+    dist = dist[dist_rev]
+    ii = ii[dist_rev]
+    pcd_xyz_top1 = pcd[ii[:,0]]  # (n, 3)
+    pcd_norm_top1 = pcd_norm[ii[:,0]] # (n, 3)
+    pcd_nn = pcd[ii.reshape(-1)].reshape(ii.shape[0], ii.shape[1], 3)  # (n, k, 3)
+    norm_reg = np.sum(np.abs((pcd_xyz_top1[:,None,:] - pcd_nn) * pcd_norm_top1[:,None,:]), axis=-1)  # (n, k)
+    plane_rev = np.mean(norm_reg, axis=1) < norm_reg_err
+    corr_data = dict()
+    corr_data['src_pt_pcd'] = pcd_xyz_top1[~plane_rev]
+    corr_data['src_pt_campt'] = cam_mappoint[dist_rev][~plane_rev] * scale  # scaled camera mappoints
+    corr_data['src_pl_pcd'] = pcd_xyz_top1[plane_rev]
+    corr_data['src_pl_norm'] = pcd_norm_top1[plane_rev]
+    corr_data['src_pl_campt'] = cam_mappoint[dist_rev][plane_rev] * scale  # scaled camera mappoints
     return corr_data

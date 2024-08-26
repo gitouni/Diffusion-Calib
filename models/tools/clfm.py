@@ -40,9 +40,9 @@ class CLFM(nn.Module):
         return out2d, out3d  # (N,C,H,W), (N,C,M)
 
 class CLFM_2D(nn.Module):
-    def __init__(self, in_channels_2d, in_channels_3d, fusion_fn='sk', norm=None):
+    def __init__(self, in_channels_2d, in_channels_3d, fusion_fn='sk', norm=None, fusion_knn=1):
         super().__init__()
-        self.interp = FusionAwareInterp(in_channels_3d, k=1, norm=norm)
+        self.interp = FusionAwareInterp(in_channels_3d, k=fusion_knn, norm=norm)
         if fusion_fn == 'add':
             self.fuse2d = AddFusion(in_channels_2d, in_channels_3d, in_channels_2d, 'nchw', norm)
         elif fusion_fn == 'concat':
