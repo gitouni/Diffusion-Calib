@@ -10,6 +10,12 @@ def inv_pose(pose_mat:torch.Tensor):
     inv_pose_mat[...,:3,[3]] = -inv_pose_mat[...,:3,:3] @ pose_mat[...,:3,[3]]
     return inv_pose_mat
 
+def inv_pose_np(pose_mat:np.ndarray):
+    inv_pose_mat = pose_mat.copy()
+    inv_pose_mat[...,:3,:3] = pose_mat[...,:3,:3].transpose(-1,-2)
+    inv_pose_mat[...,:3,[3]] = -inv_pose_mat[...,:3,:3] @ pose_mat[...,:3,[3]]
+    return inv_pose_mat
+
 class RandomTransformSE3:
     """ rigid motion """
     def __init__(self, max_deg, max_tran, mag_randomly=True, concat=False):
@@ -72,7 +78,7 @@ class UniformTransformSE3:
         self.gt = None
         self.igt = None
 
-    def generate_transform(self, num:int=1):
+    def generate_transform(self, num:int=1, return_se3:bool=False):
         # return: a twist-vector
         if self.randomly:
             deg = torch.rand(num, 1)*self.max_deg
@@ -90,9 +96,11 @@ class UniformTransformSE3:
         G[:, 3, 3] = 1
         G[:, 0:3, 0:3] = R
         G[:, 0:3, 3] = t
+        if return_se3:
+            return G  # (N, 4, 4)
+        else:
+            return se3.log(G) # --> (N, 6)
 
-        x = se3.log(G) # --> (N, 6)
-        return x # [N, 6]
 
     def apply_transform(self, p0, x):
         # p0: [3,N] or [6,N]
@@ -123,20 +131,20 @@ class DepthImgGenerator:
         self.InTran[0,:InTran.size(0),:InTran.size(1)] = InTran  # [1,3,3]
         self.pcd_range = pcd_range  # (B,N)
 
-    def transform(self, ExTran:torch.Tensor, pcd:torch.Tensor)->tuple:
+    def transform(self, extran:torch.Tensor, pcd:torch.Tensor)->tuple:
         """transform pcd and project it to img
 
         Args:
-            ExTran (torch.Tensor): B,4,4
+            extran (torch.Tensor): B,4,4
             pcd (torch.Tensor): B,3,N
 
         Returns:
             tuple: depth_img (B,H,W), transformed_pcd (B,3,N)
         """
         H,W = self.img_shape
-        B = ExTran.size(0)
+        B = extran.size(0)
         self.InTran = self.InTran.to(pcd.device)
-        pcd = se3.transform(ExTran,pcd)  # [B,4,4] x [B,3,N] -> [B,3,N]
+        pcd = se3.transform(extran,pcd)  # [B,4,4] x [B,3,N] -> [B,3,N]
         proj_pcd = torch.bmm(self.InTran.repeat(B,1,1),pcd) # [B,3,3] x [B,3,N] -> [B,3,N]
         proj_x = (proj_pcd[:,0,:]/proj_pcd[:,2,:]).type(torch.long)
         proj_y = (proj_pcd[:,1,:]/proj_pcd[:,2,:]).type(torch.long)
@@ -150,19 +158,19 @@ class DepthImgGenerator:
             batch_depth_img[bi*torch.ones_like(proj_xrev),proj_yrev,proj_xrev] = self.pcd_range[bi,rev_i]
         return batch_depth_img.unsqueeze(1)   # (B,1,H,W)
     
-    def __call__(self,ExTran:torch.Tensor,pcd:torch.Tensor):
+    def __call__(self,extran:torch.Tensor,pcd:torch.Tensor):
         """transform pcd and project it to img
 
         Args:
-            ExTran (torch.Tensor): B,4,4
+            extran (torch.Tensor): B,4,4
             pcd (torch.Tensor): B,3,N
 
         Returns:
             depth_img (B,H,W)
         """
-        assert len(ExTran.size()) == 3, 'ExTran size must be (B,4,4)'
+        assert len(extran.size()) == 3, 'extran size must be (B,4,4)'
         assert len(pcd.size()) == 3, 'pcd size must be (B,3,N)'
-        return self.transform(ExTran,pcd)
+        return self.transform(extran,pcd)
     
 def pcd_projection(img_shape:tuple,intran:np.ndarray,pcd:np.ndarray,range:np.ndarray):
     """project pcd into depth img
