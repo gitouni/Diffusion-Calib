@@ -212,6 +212,8 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
     steps = config['model']['diffuser']['dpm_argv']['steps'] if 'diffusion' in model_type else iters
     name = "{}_{}".format(model_type, steps)
     res_dir = experiment_dir.joinpath(path_argv['results']).joinpath(name)
+    if res_dir.exists():
+        shutil.rmtree(str(res_dir))
     res_dir.mkdir(exist_ok=True,parents=True)
     file_handler = logging.FileHandler(str(log_dir) + '/test_{}_{}.log'.format(model_type, steps), mode=logger_mode)
     file_handler.setLevel(logging.INFO)
@@ -229,10 +231,12 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
     record_list = []
     for name, dataloader in zip(name_list, dataloader_list):
         surrogate_model.train()
+        sub_res_dir = res_dir.joinpath(name)
+        sub_res_dir.mkdir()
         if model_type == 'diffusion' :
-            record, valid_ratio = test_diffuser(dataloader, name, diffuser, logger, device, run_argv['log_per_iter'], res_dir)
+            record, valid_ratio = test_diffuser(dataloader, name, diffuser, logger, device, run_argv['log_per_iter'], sub_res_dir)
         elif model_type == 'iterative':
-            record, valid_ratio = test_iterative(dataloader,name, surrogate_model, logger, device, run_argv['log_per_iter'], res_dir, iters)
+            record, valid_ratio = test_iterative(dataloader,name, surrogate_model, logger, device, run_argv['log_per_iter'], sub_res_dir, iters)
         # elif model_type == 'diffusion-guidance':
         #     record, valid_ratio = test_diffuser_guidance(dataloader, name, diffuser, probnet, classifier_fn_argv, logger, device, run_argv['log_per_iter'], res_dir)
         else:
@@ -247,8 +251,8 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', default="cfg/kitti.yml", type=str)
-    parser.add_argument('--model_type',type=str, choices=['diffusion','diffusion-guidance','iterative'], default='iterative')
+    parser.add_argument('--config', default="cfg/kitti_calibnet.yml", type=str)
+    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='diffusion')
     parser.add_argument("--iters",type=int,default=1)
     args = parser.parse_args()
     config = yaml.load(open(args.config,'r'), yaml.SafeLoader)

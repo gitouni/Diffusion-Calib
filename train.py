@@ -20,6 +20,8 @@ import logging
 from pathlib import Path
 from typing import Dict
 
+# torch.backends.cudnn.benchmark = False
+# torch.backends.cudnn.deterministic = True
 
 def get_dataloader(train_base_dataset_argv:Dict, train_dataset_argv:Dict,
         val_base_dataset_argv:Dict, val_dataset_argv:Dict,
@@ -59,11 +61,11 @@ def val_epoch(val_loader:DataLoader, diffuser:Diffuser, logger:logging.Logger, d
             R_loss, t_loss = geodesic_loss(x0_se3, gt_se3)
             loss = diffuser.loss_fn(x0_hat, gt_x)
             if torch.isnan(R_loss).sum() + torch.isnan(t_loss).sum() + torch.isnan(loss).sum() > 0:
-                logger.warning("nan value detected, skip this batch.")
+                logger.warning("nan value detected, validation failed.")
                 N_valid -= 1
                 iterator.set_postfix(state='nan')
                 iterator.update(1)
-                continue
+                exit(1)
             total_loss += loss
             tracker.update('R',R_loss.item())
             tracker.update('T',t_loss.item())
@@ -142,11 +144,13 @@ def main(config:Dict, config_path:str):
                 gt_delta_x = se3.log(gt_se3)  # (B, 6)
                 optimizer.zero_grad()
                 loss, x0_hat = diffuser.forward(gt_delta_x, (img, pcd, init_extran, camera_info))
+                # R_loss, t_loss = geodesic_loss(se3.exp(x0_hat), gt_se3)
+                # loss = R_loss + t_loss
                 if torch.isnan(loss).sum() > 0:
-                    logger.warning("nan detected in loss, skip this batch.")
+                    logger.warning("nan detected, training failed.")
                     iterator.set_postfix(state='nan')
                     iterator.update(1)
-                    continue
+                    exit(1)
                 loss.backward()
                 nn.utils.clip_grad_norm_(diffuser.x0_fn.model.parameters(), max_norm=clip_grad, norm_type=2)  # avoid gradient explosion
                 optimizer.step()

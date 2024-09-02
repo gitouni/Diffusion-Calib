@@ -6,16 +6,20 @@ from torchvision.transforms import transforms as Tf
 import numpy as np
 import pykitti
 from nuscenes.nuscenes import NuScenes
+from pyquaternion import Quaternion
+from nuscenes.utils.data_classes import LidarPointCloud
 import open3d as o3d
 from models.util import transform, se3
 from PIL import Image
 from torch import Generator, randperm
 from torch.utils.data import Dataset, Subset, BatchSampler
-from typing import Iterable, List, Dict, Union, Optional, Tuple, Sequence
+from typing import Iterable, List, Dict, Union, Optional, Tuple, Sequence, Literal
 from models.colmap.io import read_model, CAMERA_TYPE
 from models.tools.cmsc import nptran
 from models.util.transform import inv_pose_np
 from RANSAC.base import RotEstimator,TslEstimator,RotRANSAC, TslRANSAC
+import re
+
 IMAGENET_MEAN=[0.485, 0.456, 0.406]
 IMAGENET_STD=[0.229, 0.224, 0.225]
 
@@ -464,10 +468,8 @@ class BaseKITTIDataset(Dataset):
         self.sumsep = np.cumsum(self.sep)
         self.resample_tran = Resampler(pcd_sample_num)
         self.tensor_tran = lambda x:torch.from_numpy(x).to(torch.float32)
-        img_tran = [Tf.ToTensor(), Tf.Normalize(IMAGENET_MEAN, IMAGENET_STD)]
-        if self.resize_size is not None:
-            img_tran.append(Tf.Resize(self.resize_size))
-        self.img_tran = Tf.Compose(img_tran)
+        self.img_tran = Tf.Compose([Tf.ToTensor(),
+                                    Tf.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
         self.pcd_tran = KITTIFilter(voxel_size, min_dist, skip_point)
         self.extend_ratio = extend_ratio
         
@@ -511,7 +513,7 @@ class BaseKITTIDataset(Dataset):
         K_cam_extend = K_cam.copy()  # K_cam_extend for dilated projection
         K_cam_extend[0,-1] *= self.extend_ratio[0]
         K_cam_extend[1,-1] *= self.extend_ratio[1]
-        raw_img = raw_img.resize([RW,RH],Image.BILINEAR)
+        raw_img = raw_img.resize([RW,RH],Image.Resampling.BILINEAR)
         _img = self.img_tran(raw_img)  # raw img input (3,H,W)
         pcd:np.ndarray = data.get_velo(sub_index)[:,:3]
         pcd = self.pcd_tran(pcd)
@@ -530,7 +532,7 @@ class BaseKITTIDataset(Dataset):
             "sensor_w": RW,
             "projection_mode": "perspective"
         }
-        return dict(img=_img,pcd=_pcd, camera_info=camera_info, extran=T_cam2velo)
+        return dict(img=_img,pcd=_pcd, camera_info=camera_info, extran=T_cam2velo, group_idx=group_idx, sub_index=sub_index)
     
     @staticmethod
     def collate_fn(zipped_x:Iterable[Dict[str, Union[torch.Tensor, Dict]]]):
@@ -538,6 +540,8 @@ class BaseKITTIDataset(Dataset):
         batch['img'] = torch.stack([x['img'] for x in zipped_x])
         batch['pcd'] = torch.stack([x['pcd'] for x in zipped_x])
         batch['extran'] = torch.stack([x['extran'] for x in zipped_x])
+        batch['group_idx'] = [x['group_idx'] for x in zipped_x]
+        batch['sub_index'] = [x['sub_index'] for x in zipped_x]
         batch['camera_info'] = zipped_x[0]['camera_info']
         batch['camera_info']['fx'] = torch.tensor([x['camera_info']['fx'] for x in zipped_x], dtype=torch.float32)
         batch['camera_info']['fy'] = torch.tensor([x['camera_info']['fy'] for x in zipped_x], dtype=torch.float32)
@@ -583,7 +587,8 @@ class PertubKITTIDataset(Dataset):
             igt = se3.exp(self.perturb[:,total_index,:]).squeeze(0)  # (1,6) -> (1,4,4)
             gt = transform.inv_pose(igt).squeeze(0)
         extran = igt @ extran
-        new_data = dict(img=data['img'],pcd=data['pcd'], gt=gt, extran=extran, camera_info=data['camera_info'])
+        new_data = dict(img=data['img'],pcd=data['pcd'], gt=gt, extran=extran, camera_info=data['camera_info'],
+                        group_idx=data['group_idx'], sub_index=data['sub_index'])
         return new_data
     
     @staticmethod
@@ -591,6 +596,8 @@ class PertubKITTIDataset(Dataset):
         batch = dict()
         batch['img'] = torch.stack([x['img'] for x in zipped_x])
         batch['pcd'] = torch.stack([x['pcd'] for x in zipped_x])
+        batch['group_idx'] = [x['group_idx'] for x in zipped_x]
+        batch['sub_index'] = [x['sub_index'] for x in zipped_x]
         batch['extran'] = torch.stack([x['extran'] for x in zipped_x])
         batch['gt'] = torch.stack([x['gt'] for x in zipped_x])
         batch['camera_info'] = zipped_x[0]['camera_info']
@@ -637,13 +644,100 @@ class PertubSeqKITTIDataset(Dataset):
         return batch
 
 class NuSceneDataset(Dataset):
-    def __init__(self) -> None:
-        nusc = NuScenes(version='v1.0-mini', dataroot='data/nuScenes', verbose=True)
-        my_sample = nusc.sample[100]
-        nusc.render_pointcloud_in_image(my_sample['token'], pointsensor_channel='LIDAR_TOP')
-        super().__init__()
+    def __init__(self, scene_names:Optional[List[str]]=None,
+            cam_sensor_name:Literal['CAM_FRONT','CAM_FRONT_RIGHT','CAM_BACK_RIGHT','CAM_BACK','CAM_BACK_LEFT','CAM_FRONT_LEFT']='CAM_FRONT',
+            point_sensor_name:str='LIDAR_TOP',skip_point:int=1,
+            voxel_size=0.15, min_dist=0.15, pcd_sample_num=8192,
+            resize_size:Optional[Tuple[int,int]]=None, extend_ratio=(2.5,2.5)) -> None:
+        self.nusc = NuScenes(version='v1.0-mini', dataroot='data/nuScenes', verbose=True)
+        self.cam_sensor_name = cam_sensor_name
+        self.point_sensor_name = point_sensor_name
+        if scene_names is not None:
+            self.select_scene = [scene for scene in self.nusc.scene if scene['name'] in scene_names]
+        else:
+            self.select_scene = [scene for scene in self.nusc.scene if re.search('night',scene['description'].lower()) is None]
+        self.scene_num_list = [scene['nbr_samples'] for scene in self.select_scene]
+        self.cum_num_list = np.cumsum(self.scene_num_list)
+        self.sample_tokens_by_scene = []
+        for scene, nbr_sample in zip(self.select_scene, self.scene_num_list):
+            sample_tokens = []
+            first_sample_token = scene['first_sample_token']
+            sample_tokens.append(first_sample_token)
+            sample_token  = first_sample_token
+            for _ in range(nbr_sample - 1):
+                sample = self.nusc.get('sample', sample_token)
+                sample_token = sample['next']
+                sample_tokens.append(sample_token)
+            self.sample_tokens_by_scene.append(sample_tokens)
+        self.img_tran = Tf.Compose([
+             Tf.ToTensor(),
+             Tf.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
+        self.pcd_filter = KITTIFilter(voxel_size, min_dist, skip_point)
+        self.tensor_tran = lambda x:torch.from_numpy(x).to(torch.float32)
+        self.resampler = Resampler(pcd_sample_num)
+        self.resize_size = resize_size
+        self.extend_ratio = extend_ratio
+    def __len__(self):
+        return self.cum_num_list[-1]
+    
+    def getitem(self, group_idx:int, sub_index:int):
+        token = self.sample_tokens_by_scene[group_idx][sub_index]
+        sample = self.nusc.get('sample', token)
+        img, pcd = self.get_data(sample, self.cam_sensor_name, self.point_sensor_name)
+
+    
+    def get_data(self, sample_record:Dict, camera_channel:Literal['CAM_FRONT','CAM_FRONT_RIGHT','CAM_BACK_RIGHT','CAM_BACK','CAM_BACK_LEFT','CAM_FRONT_LEFT'], pointsensor_channel:Literal['LIDAR_TOP']) -> Tuple[Image.Image, np.ndarray]:
+        pointsensor_token = sample_record['data'][pointsensor_channel]
+        camera_token = sample_record['data'][camera_channel]
+        cam = self.nusc.get('sample_data', camera_token)
+        pointsensor = self.nusc.get('sample_data', pointsensor_token)
+        img_path = os.path.join(self.nusc.dataroot, cam['filename'])
+        pcl_path = os.path.join(self.nusc.dataroot, pointsensor['filename'])
+        img = Image.open(img_path)
+        pc = LidarPointCloud.from_file(pcl_path)
+        pcd = pc.points.transpose(0,1)[:,:3]
+        cs_record = self.nusc.get('calibrated_sensor', pointsensor['calibrated_sensor_token'])
+        pc.rotate(Quaternion(cs_record['rotation']).rotation_matrix)
+        pc.translate(np.array(cs_record['translation']))
+
+        # Second step: transform from ego to the global frame.
+        poserecord = self.nusc.get('ego_pose', pointsensor['ego_pose_token'])
+        pc.rotate(Quaternion(poserecord['rotation']).rotation_matrix)
+        pc.translate(np.array(poserecord['translation']))
+
+        # Third step: transform from global into the ego vehicle frame for the timestamp of the image.
+        poserecord = self.nusc.get('ego_pose', cam['ego_pose_token'])
+        pc.translate(-np.array(poserecord['translation']))
+        pc.rotate(Quaternion(poserecord['rotation']).rotation_matrix.T)
+
+        # Fourth step: transform from ego into the camera.
+        cs_record = self.nusc.get('calibrated_sensor', cam['calibrated_sensor_token'])
+        pc.translate(-np.array(cs_record['translation']))
+        pc.rotate(Quaternion(cs_record['rotation']).rotation_matrix.T)
+        calibed_pcd = pc.points.transpose(0,1)[:,:3]
+
+        intran = cs_record['camera_intrinsic']
+        H, W = img.height, img.width
+        if self.resize_size is not None:
+            RH, RW = self.resize_size[0], self.resize_size[1]
+        else:
+            RH, RW = H, W
+        kx, ky = RW / W, RH / H
+        intran[:,0] *= kx
+        intran[:,1] *= ky
+        REVH,REVW = self.extend_ratio[0]*RH,self.extend_ratio[1] * RW
+        K_cam_extend = intran.copy()  # K_cam_extend for dilated projection
+        K_cam_extend[0,-1] *= self.extend_ratio[0]
+        K_cam_extend[1,-1] *= self.extend_ratio[1]
+        img = img.resize([RW,RH],Image.Resampling.BILINEAR)
+        _img = self.img_tran(img)  # raw img input (3,H,W)
+        *_,rev = transform.binary_projection((REVH,REVW), K_cam_extend, calibed_pcd)
+        pcd = pcd[rev,:]
+        pcd = self.resample_tran(pcd) # (n,3)
         
-        
+        return img, pc.points.transpose(0,1)[:,:3], intran
+
+
 if __name__ == "__main__":
     base_dataset = BaseKITTIDataset('data/kitti', seqs=['00','01'], skip_frame=3)
     dataset = PertubKITTIDataset(base_dataset, 30, 0.3, True)
