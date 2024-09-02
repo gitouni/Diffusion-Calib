@@ -3,11 +3,11 @@ from .util import se3
 # from .util.seq_utils import transformer_encoder_wrapper
 import torch.nn as nn
 import torch
-from typing import Dict, Iterable, Sequence, Tuple, Literal, Union
+from typing import Dict, Iterable, List, Tuple, Literal, Optional, Sequence
 from abc import abstractmethod, ABC
 from .calibnet.CalibNet import CalibNet as VanillaCalibNet
 from .lccnet.LCCNet import LCCNet as VanillaLCCNet
-from .tools.core import DepthImgGenerator
+from .tools.core import DepthImgGenerator, BasicBlock
 
 
 class Surrogate(ABC):
@@ -30,17 +30,17 @@ class CalibNet(Surrogate, nn.Module):
         self.pcd2depth = DepthImgGenerator(**pcd2depth_argv)
 
     def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
-        pcd_norm = torch.linalg.norm(pcd, dim=1)  # (B, N)
+        # pcd_norm = torch.linalg.norm(pcd, dim=1)  # (B, N)
         pcd_tf = se3.transform(Tcl, pcd)
-        depth_img = self.pcd2depth.project(pcd_tf, pcd_norm, camera_info)
+        depth_img = self.pcd2depth.project(pcd_tf, camera_info)
         x0 = self.encoder(img, depth_img)  # (B, D)
         return x0  # (B, x_dim)
     
     def restore_buffer(self, img:torch.Tensor, pcd:torch.Tensor):
-        pass  # just for compatiblitiy
+        self.encoder.restore_buffer(img)
 
     def clear_buffer(self):
-        pass  # just for compatiblitiy
+        self.encoder.clear_buffer()
 
 class LCCNet(Surrogate, nn.Module):
     def __init__(self, lccnet_argv:Dict, pcd2depth_argv:Dict):
@@ -49,17 +49,17 @@ class LCCNet(Surrogate, nn.Module):
         self.pcd2depth = DepthImgGenerator(**pcd2depth_argv)
     
     def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
-        pcd_norm = torch.linalg.norm(pcd, dim=1)  # (B, N)
+        # pcd_norm = torch.linalg.norm(pcd, dim=1)  # (B, N)
         pcd_tf = se3.transform(Tcl, pcd)
-        depth_img = self.pcd2depth.project(pcd_tf, pcd_norm, camera_info)
+        depth_img = self.pcd2depth.project(pcd_tf, camera_info)
         x0 = self.encoder(img, depth_img)  # (B, D)
         return x0  # (B, x_dim)
     
     def restore_buffer(self, img:torch.Tensor, pcd:torch.Tensor):
-        pass  # just for compatiblitiy
+        self.encoder.restore_buffer(img)
 
     def clear_buffer(self):
-        pass  # just for compatiblitiy
+        self.encoder.clear_buffer()
 
 class MLPNet(nn.Module):
     def __init__(self, head_dims:Iterable[int], sub_dims:Iterable[int], activation_func:nn.Module):
@@ -89,13 +89,69 @@ class MLPNet(nn.Module):
         return torch.cat([rot_x, tsl_x],dim=-1)
 
 
+class Aggregation(nn.Module):
+    def __init__(self,inplanes:int, planes=96, mlp_dims:Optional[List[int]]=None, final_feat=(2,4), activation_fn:nn.Module=nn.ReLU(inplace=True)):
+        super(Aggregation,self).__init__()
+        self.head_conv = nn.Sequential(
+            BasicBlock(inplanes, planes*4, activation_fnc=activation_fn),
+            BasicBlock(planes*4, planes*2, activation_fnc=activation_fn)
+        )
+        self.rot_conv = nn.Sequential(
+            BasicBlock(planes*2, planes, activation_fnc=activation_fn),
+            nn.AdaptiveAvgPool2d(output_size=final_feat)
+        )
+        self.tsl_conv = nn.Sequential(
+            BasicBlock(planes*2, planes, activation_fnc=activation_fn),
+            nn.AdaptiveAvgPool2d(output_size=final_feat)
+        )
+        if mlp_dims is None:
+            mlp_dims = []
+        mlp_dims = [planes*final_feat[0]*final_feat[1]] + mlp_dims + [3]
+        rot_fc = []
+        tsl_fc = []
+        for i in range(len(mlp_dims) - 2):
+            rot_fc.append(nn.Linear(mlp_dims[i], mlp_dims[i+1]))
+            rot_fc.append(activation_fn)
+            tsl_fc.append(nn.Linear(mlp_dims[i], mlp_dims[i+1]))
+            tsl_fc.append(activation_fn)
+        rot_fc.append(nn.Linear(mlp_dims[-2], mlp_dims[-1]))
+        tsl_fc.append(nn.Linear(mlp_dims[-2], mlp_dims[-1]))
+        self.rot_fc = nn.Sequential(*rot_fc)
+        self.tsl_fc = nn.Sequential(*tsl_fc)
+        for m in self.head_conv.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight.data, mode='fan_in')
+                if m.bias is not None:
+                    m.bias.data.zero_()
+        for m in self.rot_conv.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight.data, mode='fan_in')
+                if m.bias is not None:
+                    m.bias.data.zero_()
+        for m in self.tsl_conv.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight.data, mode='fan_in')
+                if m.bias is not None:
+                    m.bias.data.zero_()
+        for m in self.rot_fc.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight,0.1)
+                nn.init.xavier_normal_(m.weight,0.1)
+
+    def forward(self,x:torch.Tensor):
+        x = self.head_conv(x)
+        x_rot = self.rot_conv(x)
+        x_tsl = self.tsl_conv(x)
+        x_rot = self.rot_fc(torch.flatten(x_rot, start_dim=1))
+        x_tsl = self.tsl_fc(torch.flatten(x_tsl, start_dim=1))
+        return torch.cat([x_rot, x_tsl], dim=1)
+
 class ProjFusionNet(Surrogate, nn.Module):
-    def __init__(self, head_dims:Sequence[int], hidden_dims:Sequence[int], activation:Literal['leakyrelu','relu','elu','gelu'], inplace:bool, encoder_argv:Dict) -> None:
+    def __init__(self, activation:Literal['leakyrelu','relu','elu','gelu'], inplace:bool, encoder_argv:Dict, aggregation_argv:Dict) -> None:
         super().__init__()
         activation_func = get_activation_func(activation, inplace)
         self.encoder = FusionNet(**encoder_argv)
-        head_dims = [self.encoder.out_dim] + head_dims
-        self.mlp = MLPNet(head_dims, [head_dims[-1]] + hidden_dims + [3], activation_func)
+        self.mlp = Aggregation(inplanes=self.encoder.out_dim, activation_fn=activation_func, **aggregation_argv)
 
     def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
         feat = self.encoder(img, pcd, Tcl, camera_info)  # (B, D)

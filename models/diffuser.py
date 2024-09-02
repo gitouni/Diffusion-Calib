@@ -144,18 +144,13 @@ class BaseNetwork(nn.Module):
 					m.init_weights(self.init_type, self.gain)
 
 class Diffuser(BaseNetwork):
-	def __init__(self, denoiser:Denoiser, beta_schedule:Dict, dpm_argv:Dict,  **kwargs):
+	def __init__(self, denoiser:Denoiser, beta_schedule:Dict, dpm_argv:Dict, **kwargs):
 		"""Diffuser
 
 		Args:
-			denoiser_paras (dict): hidden_dims:List[int], x_dim:int, depthmap_scale[Optional, float] = 256
-			beta_schedule (dict): schedule:Literal['quad','linear','warmup10','warmup50','const','jsd','cosine'],
-						n_timestep:int, linear_start:float=1e-6, linear_end:float=1e-2, cosine_s:float=8e-3
-			loss_type (Literal['mse','mae']): str
-			noise_std (float): amplitude of noise
-
-		Raises:
-			NotImplementedError: _description_
+			denoiser (Denoiser): Denoiser D(I, P, T_CL)
+			beta_schedule (Dict): _description_
+			dpm_argv (Dict): _description_
 		"""
 		super(Diffuser, self).__init__(**kwargs)
 		self.x0_fn = denoiser
