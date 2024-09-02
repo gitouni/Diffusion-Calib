@@ -2,13 +2,13 @@ import torch
 import torch.nn as nn
 from .utils import grid_sample_wrapper, mesh_grid, k_nearest_neighbor, batch_indexing, softmax, timer
 from .mlp import Conv1dNormRelu, Conv2dNormRelu
-
+from typing import Literal
 
 class CLFM(nn.Module):
-    def __init__(self, in_channels_2d, in_channels_3d, fusion_fn='sk', norm=None):
+    def __init__(self, in_channels_2d, in_channels_3d, fusion_fn:Literal['add','concat','gated','sk']='sk', norm=None, fusion_knn:int=1):
         super().__init__()
 
-        self.interp = FusionAwareInterp(in_channels_3d, k=1, norm=norm)
+        self.interp = FusionAwareInterp(in_channels_3d, k=fusion_knn, norm=norm)
         self.mlps3d = Conv1dNormRelu(in_channels_2d, in_channels_2d, norm=norm)
 
         if fusion_fn == 'add':
@@ -27,20 +27,17 @@ class CLFM(nn.Module):
             raise ValueError
 
     @timer.timer_func
-    def forward(self, uv, feat_2d, feat_3d):
-        feat_2d = feat_2d.float()
-        feat_3d = feat_3d.float()
-
+    def forward(self, uv, feat_2d:torch.Tensor, feat_3d:torch.Tensor):
         feat_3d_interp = self.interp(uv, feat_2d.detach(), feat_3d.detach())
         out2d = self.fuse2d(feat_2d, feat_3d_interp)
 
         feat_2d_sampled = grid_sample_wrapper(feat_2d.detach(), uv)
         out3d = self.fuse3d(self.mlps3d(feat_2d_sampled.detach()), feat_3d)
 
-        return out2d, out3d  # (N,C,H,W), (N,C,M)
+        return out2d, out3d  # (B,C,H,W), (B,C,N)
 
 class CLFM_2D(nn.Module):
-    def __init__(self, in_channels_2d, in_channels_3d, fusion_fn='sk', norm=None, fusion_knn=1):
+    def __init__(self, in_channels_2d, in_channels_3d, fusion_fn:Literal['add','concat','gated','sk']='sk', norm=None, fusion_knn=1):
         super().__init__()
         self.interp = FusionAwareInterp(in_channels_3d, k=fusion_knn, norm=norm)
         if fusion_fn == 'add':
@@ -68,8 +65,8 @@ class FusionAwareInterp(nn.Module):
         self.k = k
         self.out_conv = Conv2dNormRelu(n_channels_3d, n_channels_3d, norm=norm)
         self.score_net = nn.Sequential(
-            Conv2dNormRelu(3, 16),  # [dx, dy, |dx, dy|_2]
-            Conv2dNormRelu(16, n_channels_3d, act='sigmoid'),
+            Conv2dNormRelu(3, k),  # [dx, dy, |dx, dy|_2]
+            Conv2dNormRelu(k, n_channels_3d, act='sigmoid'),
         )
 
     def forward(self, uv, feat_2d, feat_3d):
@@ -84,7 +81,8 @@ class FusionAwareInterp(nn.Module):
         knn_uv, knn_feat3d = torch.split(
             batch_indexing(
                 torch.cat([uv, feat_3d], dim=1),
-                knn_indices
+                knn_indices,
+                layout='channel_first'
             ), [2, n_channels_3d], dim=1)
 
         knn_offset = knn_uv - grid[..., None]  # [B, 2, HW, k]

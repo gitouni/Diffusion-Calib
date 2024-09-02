@@ -5,10 +5,11 @@ from typing import List
 from .csrc import k_nearest_neighbor, furthest_point_sampling
 
 
-def se3_transform(g: torch.Tensor, pcd: torch.Tensor):
+
+def se3_transform(g: torch.Tensor, a: torch.Tensor):
     # g : SE(3),  * x 4 x 4
     # a : R^3,    * x 3[x N]
-    return g[...,:3,:3] @ pcd + g[...,:3,[3]]
+    return g[...,:3,:3] @ a + g[...,:3,[3]]
 
 class InputPadder:
     def __init__(self, dims, x=8):
