@@ -6,13 +6,12 @@ Modified version (LCCNet) by Xudong Lv
 """
 
 import torch
-# import torchvision
-# import torchvision.transforms as transforms
-# import matplotlib.pyplot as plt
+from torchvision.models import (ResNet, resnet18, resnet34, resnet50, resnet101, resnet152,
+                ResNet18_Weights, ResNet34_Weights, ResNet50_Weights, ResNet101_Weights, ResNet152_Weights)
 import numpy as np
 from torch.autograd import Variable
 import torchvision.models as models
-import torch.utils.model_zoo as model_zoo
+# import torch.utils.model_zoo as model_zoo
 #from models.CMRNet.modules.attention import *
 import torch.nn as nn
 import torch.nn.functional as F
@@ -21,16 +20,15 @@ import torch.nn.functional as F
 # import argparse
 import os
 import os.path
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 # import matplotlib.image as mpimg
 # from PIL import Image
-
+from typing import Literal, Tuple
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
 # from .networks.submodules import *
 # from .networks.correlation_package.correlation import Correlation
 from .correlation_package.correlation import Correlation
-
 
 
 # __all__ = [
@@ -193,39 +191,40 @@ def deconv(in_planes, out_planes, kernel_size=4, stride=2, padding=1):
 class ResnetEncoder(nn.Module):
     """Pytorch module for a resnet encoder
     """
-    def __init__(self, num_layers, pretrained, num_input_images=1):
+    def __init__(self, num_layers:Literal[18, 34, 50, 101, 152], pretrained:bool):
         super(ResnetEncoder, self).__init__()
 
         self.num_ch_enc = np.array([64, 64, 128, 256, 512])
 
-        resnets = {18: models.resnet18,
-                   34: models.resnet34,
-                   50: models.resnet50,
-                   101: models.resnet101,
-                   152: models.resnet152}
+        resnets = {18: (resnet18, ResNet18_Weights.DEFAULT),
+                   34: (resnet34, ResNet34_Weights.DEFAULT),
+                   50: (resnet50, ResNet50_Weights.DEFAULT),
+                   101: (resnet101, ResNet101_Weights.DEFAULT),
+                   152: (resnet152, ResNet152_Weights.DEFAULT)}
 
         if num_layers not in resnets:
             raise ValueError("{} is not a valid number of resnet layers".format(num_layers))
 
-        self.encoder = resnets[num_layers](pretrained)
+        func, weights = resnets[num_layers]
+        if not pretrained:
+            weights = None
+        self.encoder:ResNet = func(weights=weights)
 
         if num_layers > 34:
             self.num_ch_enc[1:] *= 4
 
-    def forward(self, input_image):
-        self.features = []
-        x = (input_image - 0.45) / 0.225
+    def forward(self, x:torch.Tensor):
+        features = []
         x = self.encoder.conv1(x)
         x = self.encoder.bn1(x)
-        self.features.append(self.encoder.relu(x))
+        features.append(self.encoder.relu(x))
         # self.features.append(self.encoder.layer1(self.encoder.maxpool(self.features[-1])))
-        self.features.append(self.encoder.maxpool(self.features[-1]))
-        self.features.append(self.encoder.layer1(self.features[-1]))
-        self.features.append(self.encoder.layer2(self.features[-1]))
-        self.features.append(self.encoder.layer3(self.features[-1]))
-        self.features.append(self.encoder.layer4(self.features[-1]))
-
-        return self.features
+        features.append(self.encoder.maxpool(features[-1]))
+        features.append(self.encoder.layer1(features[-1]))
+        features.append(self.encoder.layer2(features[-1]))
+        features.append(self.encoder.layer3(features[-1]))
+        features.append(self.encoder.layer4(features[-1]))
+        return features
 
 
 class LCCNet(nn.Module):
@@ -233,8 +232,8 @@ class LCCNet(nn.Module):
     Based on the PWC-DC net. add resnet encoder, dilation convolution and densenet connections
     """
 
-    def __init__(self, image_size, use_feat_from=1, md=4, use_reflectance=False, dropout=0.0,
-                 Action_Func='leakyrelu', attention=False, res_num=18):
+    def __init__(self, image_size:Tuple[int,int], use_feat_from=1, md=4, use_reflectance=False, dropout=0.0,
+                 Action_Func:Literal['leakyrelu','relu','elu']='leakyrelu', attention=False, res_num:Literal[18, 50]=18):
         """
         input: md --- maximum displacement (for correlation. default: 4), after warpping
         """
@@ -245,12 +244,17 @@ class LCCNet(nn.Module):
         if use_reflectance:
             input_lidar = 2
 
-        # original resnet
-        self.pretrained_encoder = True
-        self.net_encoder = ResnetEncoder(num_layers=self.res_num, pretrained=True, num_input_images=1)
+        self.net_encoder = ResnetEncoder(num_layers=self.res_num, pretrained=True)
 
         # resnet with leakyRELU
-        self.Action_Func = Action_Func
+        if Action_Func == 'leakyrelu':
+            self.activate_func = nn.LeakyReLU(0.1)
+        elif Action_Func == 'elu':
+            self.activate_func = nn.ELU()
+        elif Action_Func == 'relu':
+            self.activate_func = nn.ReLU()
+        else:
+            raise NotImplementedError()
         self.attention = attention
         self.inplanes = 64
         if self.res_num == 50:
@@ -268,22 +272,12 @@ class LCCNet(nn.Module):
             elif self.res_num == 18:
                 block = BasicBlock
 
-
-        # rgb_image
-        self.conv1_rgb = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3)
-        self.elu_rgb = nn.ELU()
-        self.leakyRELU_rgb = nn.LeakyReLU(0.1)
-        self.maxpool_rgb = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1_rgb = self._make_layer(block, 64, layers[0])
-        self.layer2_rgb = self._make_layer(block, 128, layers[1], stride=2)
-        self.layer3_rgb = self._make_layer(block, 256, layers[2], stride=2)
-        self.layer4_rgb = self._make_layer(block, 512, layers[3], stride=2)
-
         # lidar_image
         self.inplanes = 64
         self.conv1_lidar = nn.Conv2d(input_lidar, 64, kernel_size=7, stride=2, padding=3)
         self.elu_lidar = nn.ELU()
         self.leakyRELU_lidar = nn.LeakyReLU(0.1)
+        self.relu_lidar = nn.ReLU()
         self.maxpool_lidar = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         self.layer1_lidar = self._make_layer(block, 64, layers[0])
         self.layer2_lidar = self._make_layer(block, 128, layers[1], stride=2)
@@ -379,7 +373,7 @@ class LCCNet(nn.Module):
         self.fc1_rot = nn.Linear(512, 256)
 
         self.fc2_trasl = nn.Linear(256, 3)
-        self.fc2_rot = nn.Linear(256, 4)
+        self.fc2_rot = nn.Linear(256,3)
 
         self.dropout = nn.Dropout(dropout)
 
@@ -388,6 +382,7 @@ class LCCNet(nn.Module):
                 nn.init.kaiming_normal_(m.weight.data, mode='fan_in')
                 if m.bias is not None:
                     m.bias.data.zero_()
+        self.buffer = dict()
 
     # def _make_layer(self, block, planes, blocks, stride=1):
     #     layers = []
@@ -454,46 +449,44 @@ class LCCNet(nn.Module):
 
         return output * mask
 
+    def img_encoding(self, rgb:torch.Tensor):
+        features1 = self.net_encoder(rgb)
+        c12 = features1[0]  # 2
+        c13 = features1[2]  # 4
+        c14 = features1[3]  # 8
+        c15 = features1[4]  # 16
+        c16 = features1[5]  # 32
+        return c12, c13, c14, c15, c16
+    
+    def restore_buffer(self, rgb):
+        c12, c13, c14, c15, c16 = self.img_encoding(rgb)
+        self.buffer['c12'] = c12
+        self.buffer['c13'] = c13
+        self.buffer['c14'] = c14
+        self.buffer['c15'] = c15
+        self.buffer['c16'] = c16
+
+    def get_buffer(self):
+        return self.buffer['c12'],self.buffer['c13'],self.buffer['c14'],self.buffer['c15'],self.buffer['c16']
+    
+    def clear_buffer(self):
+        self.buffer.clear()
+
     def forward(self, rgb, lidar):
-        H, W = rgb.shape[2:4]
-
+        # H, W = rgb.shape[2:4]
         #encoder
-        if self.pretrained_encoder:
-            # rgb_image
-            features1 = self.net_encoder(rgb)
-            c12 = features1[0]  # 2
-            c13 = features1[2]  # 4
-            c14 = features1[3]  # 8
-            c15 = features1[4]  # 16
-            c16 = features1[5]  # 32
-            # lidar_image
-            x2 = self.conv1_lidar(lidar)
-            if self.Action_Func == 'leakyrelu':
-                c22 = self.leakyRELU_lidar(x2)  # 2
-            elif self.Action_Func == 'elu':
-                c22 = self.elu_lidar(x2)  # 2
-            c23 = self.layer1_lidar(self.maxpool_lidar(c22))  # 4
-            c24 = self.layer2_lidar(c23)  # 8
-            c25 = self.layer3_lidar(c24)  # 16
-            c26 = self.layer4_lidar(c25)  # 32
-
+        if len(self.buffer.keys()) == 0:
+            c12, c13, c14, c15, c16 = self.img_encoding(rgb)
         else:
-            x1 = self.conv1_rgb(rgb)
-            x2 = self.conv1_lidar(lidar)
-            if self.Action_Func == 'leakyrelu':
-                c12 = self.leakyRELU_rgb(x1)  # 2
-                c22 = self.leakyRELU_lidar(x2)  # 2
-            elif self.Action_Func == 'elu':
-                c12 = self.elu_rgb(x1)  # 2
-                c22 = self.elu_lidar(x2)  # 2
-            c13 = self.layer1_rgb(self.maxpool_rgb(c12))  # 4
-            c23 = self.layer1_lidar(self.maxpool_lidar(c22))  # 4
-            c14 = self.layer2_rgb(c13)  # 8
-            c24 = self.layer2_lidar(c23)  # 8
-            c15 = self.layer3_rgb(c14)  # 16
-            c25 = self.layer3_lidar(c24)  # 16
-            c16 = self.layer4_rgb(c15)  # 32
-            c26 = self.layer4_lidar(c25)  # 32
+            c12, c13, c14, c15, c16 = self.get_buffer()
+
+        # lidar_image
+        x2 = self.conv1_lidar(lidar)
+        c22 = self.activate_func(x2)
+        c23 = self.layer1_lidar(self.maxpool_lidar(c22))  # 4
+        c24 = self.layer2_lidar(c23)  # 8
+        c25 = self.layer3_lidar(c24)  # 16
+        c26 = self.layer4_lidar(c25)  # 32
 
         corr6 = self.corr(c16, c26) #[1, 81, 8, 16]
         corr6 = self.leakyRELU(corr6)
@@ -565,8 +558,7 @@ class LCCNet(nn.Module):
             x = torch.cat((self.conv2_4(x), x), 1)
 
         if self.use_feat_from > 5:
-            flow2 = self.predict_flow2(x)
-
+            # flow2 = self.predict_flow2(x)
             x = self.dc_conv4(self.dc_conv3(self.dc_conv2(self.dc_conv1(x))))
             #flow2 = flow2 + self.dc_conv7(self.dc_conv6(self.dc_conv5(x)))
 
@@ -578,8 +570,7 @@ class LCCNet(nn.Module):
         rot = self.leakyRELU(self.fc1_rot(x))
         transl = self.fc2_trasl(transl)
         rot = self.fc2_rot(rot)
-        rot = F.normalize(rot, dim=1)
 
-        return transl, rot
+        return torch.cat([rot, transl], dim=1)  # (B, 3), (B, 3) -> (B, 6)
 
 
