@@ -51,13 +51,13 @@ dataset:
         pin_memory: true
       args:
         batch_sampler:
-          dataset_len: 512
-          num_samples: 8
+          dataset_len: 256
+          num_samples: 16
         <<: *dataloader_common_args
       val_args:
         batch_sampler:
-          dataset_len: 256
-          num_samples: 8
+          dataset_len: 128
+          num_samples: 16
         <<: *dataloader_common_args
   test:
     common_main: &test_common_main
@@ -121,7 +121,7 @@ model:
         attention: false
         res_num: 18
       pcd2depth_argv:
-        pooling_size: 1
+        pooling_size: 5
         max_depth: 50.0
   diffuser:
     beta_schedule:
@@ -156,15 +156,15 @@ loss:
 
 optimizer:
   args:
-    lr: 2.0E-4
+    lr: 1.0E-4
     betas: [0.9, 0.999]
   max_grad: 1.0
 
 scheduler:
-  type: step
+  type: poly
   args:
-    step_size: 5
-    gamma: 0.5
+    total_iters: 30
+    power: 2.0
 run:
   n_epoch: 30
   val_per_epoch: 5

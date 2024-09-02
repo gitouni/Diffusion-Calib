@@ -51,13 +51,13 @@ dataset:
         pin_memory: true
       args:
         batch_sampler:
-          dataset_len: 512
-          num_samples: 8
+          dataset_len: 256
+          num_samples: 16
         <<: *dataloader_common_args
       val_args:
         batch_sampler:
-          dataset_len: 256
-          num_samples: 8
+          dataset_len: 128
+          num_samples: 16
         <<: *dataloader_common_args
   test:
     common_main: &test_common_main
@@ -111,19 +111,24 @@ model:
   surrogate:
     type: ProjFusionNet  # Chosen from ['ProjFusionNet','LCCNet','CalibNet'], argv should match relative class as well
     argv:
-      head_dims: [512, 256]
-      hidden_dims: [128, 128]
-      activation: gelu
+      activation: leakyrelu
       inplace: true
       encoder_argv:
         resnet_depth: 18
         resnet_pretrained: true
-        encoder_2d_chans: [32, 64, 128, 256]
+        encoder_2d_chans: [256]
         encoder_3d_chans: [32, 64, 128, 256]
-        poolings: [[8,16],[5,10],[3,6],[2,4]]
-        fuse_chans: [1024, 1024, 1024, 1024]
-        pcd_pyramid: [4096, 2048, 1024]
-        fusion_knn: 5
+        pcd_pyramid: [4096, 2048, 1024, 512]
+        max_depth: 50.0
+        proj_planes: 32
+        encoder_3d_knn: 16
+        fusion_knn: 4
+        union_feat_size: [8, 16]
+      aggregation_argv:
+        planes: 96
+        final_feat: [2, 4]
+        mlp_dims: [256, 128]
+
   diffuser:
     beta_schedule:
       schedule: cosine
@@ -157,15 +162,15 @@ loss:
 
 optimizer:
   args:
-    lr: 2.0E-4
+    lr: 1.0E-4
     betas: [0.9, 0.999]
   max_grad: 1.0
 
 scheduler:
-  type: step
+  type: poly
   args:
-    step_size: 5
-    gamma: 0.5
+    total_iters: 30
+    power: 2.0
 run:
   n_epoch: 30
   val_per_epoch: 5
