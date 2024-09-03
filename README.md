@@ -1,2 +1,2 @@
 # SurrogateCalib
-Direct Calibration Model based on Surrogate SE(3) Diffusion
+Official Implementation of Iterative Camera-Lidar Calibration via Surrogate Diffusion Models
