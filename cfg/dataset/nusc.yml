@@ -1,0 +1,79 @@
+dataset:
+  type: nuscene
+  common_args: &dataset_common_args
+    version: v1.0-mini
+    dataroot: data/nuScenes
+    scene_names: ['scene-0061', 'scene-0103', 'scene-0553', 'scene-0655', 'scene-0757', 'scene-0796', 'scene-0916']
+    cam_sensor_name: CAM_FRONT # choose from ['CAM_FRONT','CAM_FRONT_RIGHT','CAM_BACK_RIGHT','CAM_BACK','CAM_BACK_LEFT','CAM_FRONT_LEFT']
+    point_sensor_name: LIDAR_TOP
+    skip_point: 1
+    voxel_size: null
+    min_dist: 0.1
+    pcd_sample_num: 40000
+    resize_size: [256, 512]
+    extend_ratio: [2.5, 2.5]
+  
+  test:
+    common_main: &test_common_main
+      max_deg: 15
+      max_tran: 0.1
+      mag_randomly: true
+    dataset:
+      - name: scene-0061
+        base:
+          scene_names: ['scene-0061']
+          <<: *dataset_common_args
+        main:
+          <<: *test_common_main
+          file: cache/nusc/0061.txt
+      - name: scene-0103
+        base:
+          scene_names: ['scene-0103']
+          <<: *dataset_common_args
+        main:
+          <<: *test_common_main
+          file: cache/nusc/0103.txt
+      - name: scene-0553
+        base:
+          scene_names: ['scene-0553']
+          <<: *dataset_common_args
+        main:
+          <<: *test_common_main
+          file: cache/nusc/0553.txt
+      - name: scene-0655
+        base:
+          scene_names: ['scene-0655']
+          <<: *dataset_common_args
+        main:
+          <<: *test_common_main
+          file: cache/nusc/0655.txt
+      - name: scene-0757
+        base:
+          scene_names: ['scene-0757']
+          <<: *dataset_common_args
+        main:
+          <<: *test_common_main
+          file: cache/nusc/0757.txt
+      - name: scene-0796
+        base:
+          scene_names: ['scene-0796']
+          <<: *dataset_common_args
+        main:
+          <<: *test_common_main
+          file: cache/nusc/0796.txt
+      - name: scene-0916
+        base:
+          scene_names: ['scene-0916']
+          <<: *dataset_common_args
+        main:
+          <<: *test_common_main
+          file: cache/nusc/0916.txt
+
+    dataloader:
+      batch_size: 16
+      shuffle: false
+      drop_last: false
+      pin_memory: true
+      num_workers: 8
+
+
