@@ -6,8 +6,8 @@ import torch
 import torch.nn as nn
 import torch.utils
 from torch.utils.data import DataLoader
-from dataset import BaseKITTIDataset, PertubKITTIDataset, KITTIBatchSampler
-from models.denoiser import Denoiser, __classdict__ as DenoiserDict
+from dataset import BaseKITTIDataset, PerturbDataset, KITTIBatchSampler
+from models.denoiser import Denoiser, RAFTDenoiser, __classdict__ as DenoiserDict
 from models.diffuser import Diffuser
 from models.lr_scheduler import get_lr_scheduler
 from models.loss import get_loss, geodesic_loss
@@ -28,8 +28,8 @@ def get_dataloader(train_base_dataset_argv:Dict, train_dataset_argv:Dict,
         train_dataloader_argv:Dict, val_dataloader_argv:Dict):
     train_base_dataset = BaseKITTIDataset(**train_base_dataset_argv)
     val_base_dataset = BaseKITTIDataset(**val_base_dataset_argv)
-    train_dataset = PertubKITTIDataset(train_base_dataset, **train_dataset_argv)
-    val_dataset = PertubKITTIDataset(val_base_dataset, **val_dataset_argv)
+    train_dataset = PerturbDataset(train_base_dataset, **train_dataset_argv)
+    val_dataset = PerturbDataset(val_base_dataset, **val_dataset_argv)
     train_dataloader_argv['batch_sampler'] = KITTIBatchSampler(len(train_base_dataset.kitti_datalist), train_base_dataset.sep, **train_dataloader_argv['batch_sampler'])
     val_dataloader_argv['batch_sampler'] = KITTIBatchSampler(len(val_base_dataset.kitti_datalist), val_base_dataset.sep, **val_dataloader_argv['batch_sampler'])
     if hasattr(train_dataset, 'collate_fn'):
@@ -59,7 +59,10 @@ def val_epoch(val_loader:DataLoader, diffuser:Diffuser, logger:logging.Logger, d
             x0_hat = diffuser.dpm_sampling(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info))
             x0_se3 = se3.exp(x0_hat)
             R_loss, t_loss = geodesic_loss(x0_se3, gt_se3)
-            loss = diffuser.loss_fn(x0_hat, gt_x)
+            if diffuser.seq_loss:
+                loss = diffuser.loss_fn([x0_hat], gt_x)
+            else:
+                loss = diffuser.loss_fn(x0_hat, gt_x)
             if torch.isnan(R_loss).sum() + torch.isnan(t_loss).sum() + torch.isnan(loss).sum() > 0:
                 logger.warning("nan value detected, validation failed.")
                 N_valid -= 1
@@ -86,7 +89,8 @@ def main(config:Dict, config_path:str):
     # torch.backends.cudnn.benchmark=True
     # torch.backends.cudnn.enabled = False
     surrogate_model = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
-    denoiser = Denoiser(surrogate_model)
+    denoiser_class = RAFTDenoiser if config['model']['surrogate']['type'] == 'LCCRAFT' else Denoiser
+    denoiser = denoiser_class(surrogate_model)
     diffuser = Diffuser(denoiser, **config['model']['diffuser'])
     dataset_argv = config['dataset']['train']
     train_dataloader, val_dataloader = get_dataloader(dataset_argv['dataset']['train']['base'], dataset_argv['dataset']['train']['main'],
@@ -175,9 +179,11 @@ def main(config:Dict, config_path:str):
 
 
 if __name__ == '__main__':
-
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', default="cfg/kitti.yml", type=str)
+    parser.add_argument('--dataset_config', default="cfg/dataset/kitti_small.yml", type=str)
+    parser.add_argument("--model_config",type=str,default="cfg/model/lccraft.yml")
     args = parser.parse_args()
-    config = yaml.load(open(args.config,'r'), yaml.SafeLoader)
-    main(config, args.config)
+    dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
+    config = yaml.load(open(args.model_config,'r'), yaml.SafeLoader)
+    config.update(dataset_config)
+    main(config, args.model_config)

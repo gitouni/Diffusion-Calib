@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.utils
 from torch.utils.data import DataLoader
-from dataset import BaseKITTIDataset, PertubKITTIDataset, KITTIBatchSampler
+from dataset import BaseKITTIDataset, PerturbDataset, KITTIBatchSampler
 from models.denoiser import Surrogate
 from models.diffusion_scheduler import DiffusionScheduler
 from models.lr_scheduler import get_lr_scheduler
@@ -27,8 +27,8 @@ def get_dataloader(train_base_dataset_argv:Dict, train_dataset_argv:Dict,
         train_dataloader_argv:Dict, val_dataloader_argv:Dict):
     train_base_dataset = BaseKITTIDataset(**train_base_dataset_argv)
     val_base_dataset = BaseKITTIDataset(**val_base_dataset_argv)
-    train_dataset = PertubKITTIDataset(train_base_dataset, **train_dataset_argv)
-    val_dataset = PertubKITTIDataset(val_base_dataset, **val_dataset_argv)
+    train_dataset = PerturbDataset(train_base_dataset, **train_dataset_argv)
+    val_dataset = PerturbDataset(val_base_dataset, **val_dataset_argv)
     train_dataloader_argv['batch_sampler'] = KITTIBatchSampler(len(train_base_dataset.kitti_datalist), train_base_dataset.sep, **train_dataloader_argv['batch_sampler'])
     val_dataloader_argv['batch_sampler'] = KITTIBatchSampler(len(val_base_dataset.kitti_datalist), val_base_dataset.sep, **val_dataloader_argv['batch_sampler'])
     if hasattr(train_dataset, 'collate_fn'):
