@@ -7,7 +7,7 @@ import numpy as np
 from tqdm import tqdm
 from typing import Union, Tuple, Literal, Iterable, Dict, Callable, Optional
 from .util import se3
-from .denoiser import Denoiser
+from .denoiser import Denoiser, RAFTDenoiser
 from .dpm import NoiseScheduleVP, DPM_Solver, model_wrapper
 from .tools.cmsc import CBABatchCorr, CABatchCorr
 from .util.transform import inv_pose
@@ -144,25 +144,36 @@ class BaseNetwork(nn.Module):
 					m.init_weights(self.init_type, self.gain)
 
 class Diffuser(BaseNetwork):
-	def __init__(self, denoiser:Denoiser, beta_schedule:Dict, dpm_argv:Dict, **kwargs):
+	def __init__(self, denoiser:Union[Denoiser,RAFTDenoiser], beta_schedule:Dict, dpm_argv:Dict, **kwargs):
 		"""Diffuser
 
 		Args:
 			denoiser (Denoiser): Denoiser D(I, P, T_CL)
 			beta_schedule (Dict): _description_
 			dpm_argv (Dict): _description_
+			train_mode (bool): only works when denoiser is RAFTDenoiser. When train_mode=True, return sequnces of x0; else return [-1] as prediction
 		"""
 		super(Diffuser, self).__init__(**kwargs)
-		self.x0_fn = denoiser
+		
 		self.beta_schedule = beta_schedule
 		self.dpm_argv = dpm_argv
+		self.x0_fn = denoiser
+		if isinstance(denoiser, RAFTDenoiser):
+			self.seq_loss = True
+		else:
+			self.seq_loss = False
+
+
 
 	@staticmethod
 	def to_torch(x:Iterable[float], dtype=torch.float32, device=torch.device('cuda')):
 		return torch.tensor(x, dtype=dtype, device=device)
 
 	def set_loss(self, loss_fn):
-		self.loss_fn = loss_fn
+		if self.seq_loss:
+			self.loss_fn = self.x0_fn.loss(loss_fn, 0.8)
+		else:
+			self.loss_fn = loss_fn
 
 	def set_new_noise_schedule(self, device=torch.device('cuda')):
 		to_torch = partial(self.to_torch, dtype=torch.float32, device=device)
@@ -241,6 +252,8 @@ class Diffuser(BaseNetwork):
 	def dpm_sampling(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict], return_intermediate:bool=False) -> torch.Tensor:
 		def model_fn(x_t:torch.Tensor, t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]):
 			out = self.x0_fn.forward(x_t, x_cond)
+			if self.seq_loss:
+				out = out[-1]
 			# If the model outputs both 'mean' and 'variance' (such as improved-DDPM and guided-diffusion),
 			# We only use the 'mean' output for DPM-Solver, because DPM-Solver is based on diffusion ODEs.
 			return out
@@ -395,6 +408,8 @@ class Diffuser(BaseNetwork):
 			x_0=x_0, sample_gammas=sample_gammas.view(b,1), noise=noise)
 		x_0_hat = self.x0_fn.forward(x_t, x_cond)  # img, pcd, init_Tcl, camera_info
 		loss = self.loss_fn(x_0_hat, x_0)
+		if self.seq_loss:
+			x_0_hat = x_0_hat[-1]
 		return loss, x_0_hat
 
 

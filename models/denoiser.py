@@ -3,12 +3,13 @@ from .util import se3
 # from .util.seq_utils import transformer_encoder_wrapper
 import torch.nn as nn
 import torch
-from typing import Dict, Iterable, List, Tuple, Literal, Optional, Sequence
+from typing import Dict, Callable, List, Tuple, Literal, Optional, Sequence
 from abc import abstractmethod, ABC
 from .calibnet.CalibNet import CalibNet as VanillaCalibNet
 from .lccnet.LCCNet import LCCNet as VanillaLCCNet
+from .lccraft.convgru import LCCRAFT as VanillaLCCRAFT
 from .tools.core import DepthImgGenerator, BasicBlock
-
+from functools import partial
 
 class Surrogate(ABC):
     @abstractmethod
@@ -61,33 +62,23 @@ class LCCNet(Surrogate, nn.Module):
     def clear_buffer(self):
         self.encoder.clear_buffer()
 
-class MLPNet(nn.Module):
-    def __init__(self, head_dims:Iterable[int], sub_dims:Iterable[int], activation_func:nn.Module):
+class LCCRAFT(Surrogate, nn.Module):
+    def __init__(self, lccraft_argv:Dict, num_iters:int) -> None:
         super().__init__()
-        assert head_dims[-1] == sub_dims[0]
-        head_mlps = []
-        rot_mlps = []
-        tsl_mlps = []
-        for i in range(len(head_dims) -1):
-            head_mlps.append(nn.Linear(head_dims[i], head_dims[i+1]))
-            head_mlps.append(activation_func)
-        for i in range(len(sub_dims) - 2):
-            rot_mlps.append(nn.Linear(sub_dims[i], sub_dims[i+1]))
-            rot_mlps.append(activation_func)
-            tsl_mlps.append(nn.Linear(sub_dims[i], sub_dims[i+1]))
-            tsl_mlps.append(activation_func)
-        rot_mlps.append(nn.Linear(sub_dims[-2], sub_dims[-1]))
-        tsl_mlps.append(nn.Linear(sub_dims[-2], sub_dims[-1]))
-        self.head_mlps = nn.Sequential(*head_mlps)
-        self.rot_mlps = nn.Sequential(*rot_mlps)
-        self.tsl_mlps = nn.Sequential(*tsl_mlps)
+        self.encoder = VanillaLCCRAFT(**lccraft_argv)
+        self.num_iters = num_iters
 
-    def forward(self, x:torch.Tensor):
-        x = self.head_mlps(x)
-        rot_x = self.rot_mlps(x)
-        tsl_x = self.tsl_mlps(x)
-        return torch.cat([rot_x, tsl_x],dim=-1)
+    def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
+        # pcd_norm = torch.linalg.norm(pcd, dim=1)  # (B, N)
+        pcd_tf = se3.transform(Tcl, pcd)
+        x0 = self.encoder(img, pcd_tf, camera_info, self.num_iters) # (B, D)
+        return x0  # (B, x_dim)
+    
+    def restore_buffer(self, img:torch.Tensor, pcd:torch.Tensor):
+        self.encoder.restore_buffer(img)
 
+    def clear_buffer(self):
+        self.encoder.clear_buffer()
 
 class Aggregation(nn.Module):
     def __init__(self,inplanes:int, planes=96, mlp_dims:Optional[List[int]]=None, final_feat=(2,4), activation_fn:nn.Module=nn.ReLU(inplace=True)):
@@ -185,6 +176,29 @@ class Denoiser(nn.Module):
         x0 = se3.exp(delta_x0) @ se3_x_t  # sequentially transformed by se3_x_t and x0
         return se3.log(x0)
 
+class RAFTDenoiser(nn.Module):
+    def __init__(self, model:LCCRAFT):
+        super().__init__()
+        self.model = model
+
+    def restore_buffer(self, x_cond:Tuple[torch.Tensor, torch.Tensor]):
+        img, pcd = x_cond
+        self.model.restore_buffer(img, pcd)
+
+    def clear_buffer(self):
+        self.model.clear_buffer()
+
+    def forward(self, x_t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]):
+        img, pcd, Tcl, camera_info = x_cond
+        se3_x_t = se3.exp(x_t)
+        Tcl = se3_x_t @ Tcl
+        pred_se3_list = self.model(img, pcd, Tcl, camera_info)
+        x0_list = [se3.log(se3_x @ se3_x_t) for se3_x in pred_se3_list]  # sequentially transformed by se3_x_t and x0
+        return x0_list
+    
+    def loss(self, loss_fn:Callable, gamma:float):
+        return partial(self.model.encoder.sequence_loss, loss_fn=loss_fn, gamma=gamma)
+
 # class ProbNet(nn.Module):
 #     def __init__(self, hidden_dims:Sequence[int], encoder_argv:Dict, pretrained_encoder:Optional[OrderedDict]=None, freeze_encoder:bool=False):
 #         super().__init__()
@@ -267,4 +281,4 @@ class Denoiser(nn.Module):
 #         x0 = self.mlps(feat[:,-1,:])  # the final token has cross attention with other tokens
 #         return x0  # (B, x_dim)
         
-__classdict__ = {'ProjFusionNet':ProjFusionNet, 'LCCNet':LCCNet, 'CalibNet':CalibNet}
+__classdict__ = {'ProjFusionNet':ProjFusionNet, 'LCCNet':LCCNet, 'CalibNet':CalibNet, 'LCCRAFT':LCCRAFT}
