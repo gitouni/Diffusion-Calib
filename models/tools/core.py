@@ -235,16 +235,44 @@ class CorrelationNet(nn.Module):
         return corr
 
 
+
+class MLPNet(nn.Module):
+    def __init__(self, head_dims:List[int], sub_dims:List[int], activation_func:nn.Module):
+        super().__init__()
+        assert head_dims[-1] == sub_dims[0]
+        head_mlps = []
+        rot_mlps = []
+        tsl_mlps = []
+        for i in range(len(head_dims) -1):
+            head_mlps.append(nn.Linear(head_dims[i], head_dims[i+1]))
+            head_mlps.append(activation_func)
+        for i in range(len(sub_dims) - 2):
+            rot_mlps.append(nn.Linear(sub_dims[i], sub_dims[i+1]))
+            rot_mlps.append(activation_func)
+            tsl_mlps.append(nn.Linear(sub_dims[i], sub_dims[i+1]))
+            tsl_mlps.append(activation_func)
+        rot_mlps.append(nn.Linear(sub_dims[-2], sub_dims[-1]))
+        tsl_mlps.append(nn.Linear(sub_dims[-2], sub_dims[-1]))
+        self.head_mlps = nn.Sequential(*head_mlps)
+        self.rot_mlps = nn.Sequential(*rot_mlps)
+        self.tsl_mlps = nn.Sequential(*tsl_mlps)
+
+    def forward(self, x:torch.Tensor):
+        x = self.head_mlps(x)
+        rot_x = self.rot_mlps(x)
+        tsl_x = self.tsl_mlps(x)
+        return torch.cat([rot_x, tsl_x],dim=-1)
+
+
 class FusionNet(nn.Module):
     def __init__(self, resnet_depth:Literal[18, 34, 50, 101, 152],
                 resnet_pretrained:bool,
                 encoder_2d_chans:List[int]=[64, 128, 256, 512],
                 encoder_3d_chans:List[int]=[64, 128, 256, 512],
                 pcd_pyramid:List[int]=[4096, 2048, 1024, 512],
-                proj_planes:int = 16,
+                proj_planes:int = 32,
                 max_depth:float = 50.,
                 encoder_3d_knn:int = 16,
-                embed_norm:bool = False,
                 union_feat_size:Tuple[int,int] = [8,16],
                 fusion_knn:int=3
                 ):
@@ -252,7 +280,7 @@ class FusionNet(nn.Module):
         assert len(encoder_2d_chans) <= 5  # maximum of resnet output
         super().__init__()
         self.fnet_2d = Encoder2D(resnet_depth, encoder_2d_chans, pretrained=resnet_pretrained)
-        self.fnet_3d = Encoder3D(encoder_3d_chans, pcd_pyramid, norm='batch_norm', embed_norm=embed_norm, k=encoder_3d_knn)
+        self.fnet_3d = Encoder3D(encoder_3d_chans, pcd_pyramid, norm='batch_norm', k=encoder_3d_knn)
         self.depth_gen = DepthImgGenerator(pooling_size=1, max_depth=max_depth)
         self.fnet_proj = custom_resnet(inplanes=1, planes=proj_planes)
         num_levels = len(encoder_2d_chans)
@@ -276,7 +304,6 @@ class FusionNet(nn.Module):
         self.feat_buffer['feat_2ds'] = feat_2ds
         self.feat_buffer['feat_3ds'] = feat_3ds
         self.feat_buffer['xyzs'] = xyzs
-        self.feat_buffer['xyz_norm'] = torch.linalg.norm(pcd, dim=1)
 
     def get_buffer(self):
         return self.feat_buffer['feat_2ds'], self.feat_buffer['feat_3ds'], self.feat_buffer['xyzs']
@@ -358,3 +385,147 @@ class FusionNet(nn.Module):
     #         fused_feat = torch.flatten(F.adaptive_avg_pool2d(fused_2d, (1,1)), start_dim=1).reshape(B, K, -1)  # # (B*K, C, 1, 1) -> (B*K, C) -> (B, K, C)
     #         aggregated_feats.append(fused_feat)
     #     return torch.cat(aggregated_feats, dim=-1)  # (B, K, C1 + C2 + C3 + C4)
+
+class FusionNetDepthOnly(nn.Module):
+    def __init__(self, resnet_depth:Literal[18, 34, 50, 101, 152],
+                resnet_pretrained:bool,
+                encoder_2d_chans:List[int]=[64, 128, 256, 512],
+                proj_planes:int = 32,
+                max_depth:float = 50.,
+                union_feat_size:Tuple[int,int] = [8,16],
+                ):
+        assert len(encoder_2d_chans) <= 5  # maximum of resnet output
+        super().__init__()
+        self.fnet_2d = Encoder2D(resnet_depth, encoder_2d_chans, pretrained=resnet_pretrained)
+        self.depth_gen = DepthImgGenerator(pooling_size=1, max_depth=max_depth)
+        self.fnet_proj = custom_resnet(inplanes=1, planes=proj_planes)
+        num_levels = len(encoder_2d_chans)
+        self.interp_func = partial(F.interpolate, size=union_feat_size, mode='bilinear',align_corners=True)
+        planes = sum(encoder_2d_chans) + sum(self.fnet_proj.out_chans[-num_levels:])
+        self.out_dim = planes
+        self.feat_buffer = dict()
+    
+    def clear_buffer(self):
+        self.feat_buffer.clear()
+
+    def restore_buffer(self, image:torch.Tensor, pcd:torch.Tensor):
+        assert self.training == False, 'Cannot set buffer during training'
+        feat_2ds = self.fnet_2d(image)
+        self.feat_buffer['feat_2ds'] = feat_2ds
+
+    def get_buffer(self):
+        return self.feat_buffer['feat_2ds']
+    
+    def forward(self, image:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
+        """fusion net embedding
+
+        Args:
+            image (torch.Tensor): B, C, H, W
+            pcd (torch.Tensor): B, D, N
+            Tcl (torch.Tensor): B, 4, 4
+            camera_info (Dict): intran information for projection
+
+        Returns:
+            torch.Tensor: unique features for each query (Tcl)
+        """
+        if len(self.feat_buffer.keys()) == 0:
+            feat_2ds = self.fnet_2d(image)
+        else:
+            feat_2ds = self.get_buffer()
+        # B = image.shape[0]
+        aggregated_feats = []
+        num_levels = len(feat_2ds)
+        xyz_tf = se3_transform(Tcl, pcd)  # (B, 3, N) -> (B, 3, N)
+        depth_img = self.depth_gen.project(xyz_tf, camera_info)
+        feat_projs = self.fnet_proj(depth_img)
+        for feat2d, feat_proj in zip(feat_2ds, feat_projs[-num_levels:]):
+            fused_2d = torch.cat([feat2d, feat_proj], dim=1)
+            final_feat = self.interp_func(fused_2d)  # (B, C, h, w)
+            aggregated_feats.append(final_feat)
+        final_feats = torch.cat(aggregated_feats, dim=1)  # (B, C, h, w)
+        return final_feats  # (B, C*h*w)
+
+
+class FusionNetProjectOnly(nn.Module):
+    def __init__(self, resnet_depth:Literal[18, 34, 50, 101, 152],
+                resnet_pretrained:bool,
+                encoder_2d_chans:List[int]=[64, 128, 256, 512],
+                encoder_3d_chans:List[int]=[64, 128, 256, 512],
+                pcd_pyramid:List[int]=[4096, 2048, 1024, 512],
+                encoder_3d_knn:int = 16,
+                union_feat_size:Tuple[int,int] = [8,16],
+                fusion_knn:int=3
+                ):
+        assert len(encoder_2d_chans) <= len(encoder_3d_chans) == len(pcd_pyramid) 
+        assert len(encoder_2d_chans) <= 5  # maximum of resnet output
+        super().__init__()
+        self.fnet_2d = Encoder2D(resnet_depth, encoder_2d_chans, pretrained=resnet_pretrained)
+        self.fnet_3d = Encoder3D(encoder_3d_chans, pcd_pyramid, norm='batch_norm', k=encoder_3d_knn)
+        num_levels = len(encoder_2d_chans)
+        self.interp_func = partial(F.interpolate, size=union_feat_size, mode='bilinear',align_corners=True)
+        fusion_list = []
+        start_dim_3d = len(encoder_3d_chans) - num_levels
+        for i in range(num_levels):
+            fusion_list.append(FusionAwareInterp(self.fnet_3d.n_chans[start_dim_3d+i], k = fusion_knn, norm='batch_norm'))
+        self.fusion_list = nn.ModuleList(fusion_list)
+        planes = sum(encoder_2d_chans) + sum(encoder_3d_chans[-num_levels:])
+        self.out_dim = planes
+        self.feat_buffer = dict()
+    
+    def clear_buffer(self):
+        self.feat_buffer.clear()
+
+    def restore_buffer(self, image:torch.Tensor, pcd:torch.Tensor):
+        assert self.training == False, 'Cannot set buffer during training'
+        feat_2ds = self.fnet_2d(image)
+        feat_3ds, xyzs = self.fnet_3d(pcd)
+        self.feat_buffer['feat_2ds'] = feat_2ds
+        self.feat_buffer['feat_3ds'] = feat_3ds
+        self.feat_buffer['xyzs'] = xyzs
+
+    def get_buffer(self):
+        return self.feat_buffer['feat_2ds'], self.feat_buffer['feat_3ds'], self.feat_buffer['xyzs']
+    
+    def forward(self, image:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
+        """fusion net embedding
+
+        Args:
+            image (torch.Tensor): B, C, H, W
+            pcd (torch.Tensor): B, D, N
+            Tcl (torch.Tensor): B, 4, 4
+            camera_info (Dict): intran information for projection
+
+        Returns:
+            torch.Tensor: unique features for each query (Tcl)
+        """
+        if len(self.feat_buffer.keys()) == 0:
+            feat_2ds = self.fnet_2d(image)
+            feat_3ds, xyzs = self.fnet_3d(pcd)
+        else:
+            feat_2ds, feat_3ds, xyzs = self.get_buffer()
+        # B = image.shape[0]
+        aggregated_feats = []
+        num_levels = len(feat_2ds)
+        sensor_h, sensor_w = camera_info['sensor_h'], camera_info['sensor_w']
+        xyz_tf = se3_transform(Tcl, xyzs[0])  # (B, 3, N) -> (B, 3, N)
+        for i, (feat2d, feat3d, xyz) in enumerate(zip(feat_2ds, feat_3ds[-num_levels:], xyzs[-num_levels:])):
+            xyz_tf = se3_transform(Tcl, xyz)  # (B, 3, N) -> (B, 3, N)
+            feat_camera_info = camera_info.copy()
+            feat_w, feat_h = feat2d.shape[-1], feat2d.shape[-2]
+            kx = feat_w / sensor_w
+            ky = feat_h / sensor_h
+            feat_camera_info.update({
+                'sensor_w': feat_w,
+                'sensor_h': feat_h,
+                'fx': kx * camera_info['fx'],
+                'fy': ky * camera_info['fy'],
+                'cx': kx * camera_info['cx'],
+                'cy': kx * camera_info['cy']
+            })
+            uv = project_pc2image(xyz_tf, feat_camera_info)  # (B, 2, N)
+            interp_2d = self.fusion_list[i](uv, feat2d.detach(), feat3d)  # (B, C, H, W)
+            fused_2d = torch.cat([feat2d, interp_2d], dim=1)
+            final_feat = self.interp_func(fused_2d)  # (B, C, h, w)
+            aggregated_feats.append(final_feat)
+        final_feats = torch.cat(aggregated_feats, dim=1)  # (B, C, h, w)
+        return final_feats  # (B, C*h*w)
