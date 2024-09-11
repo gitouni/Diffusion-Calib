@@ -36,12 +36,12 @@ dataset:
         pin_memory: true
       args:
         batch_sampler:
-          dataset_len: 512
+          dataset_len: 256
           num_samples: 8
         <<: *dataloader_common_args
       val_args:
         batch_sampler:
-          dataset_len: 256
+          dataset_len: 128
           num_samples: 8
         <<: *dataloader_common_args
   test:
