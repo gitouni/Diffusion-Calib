@@ -444,11 +444,11 @@ class UpdateBlock(nn.Module):
 class LCCRAFT(nn.Module):
     def __init__(self, # Feature encoder
         feature_encoder_layers=(32, 32, 64, 96, 128),
-        feature_encoder_block:Literal['bottleneck','residualblock']='bottleneck',
+        feature_encoder_block:Literal['bottleneck','residualblock']='residualblock',
         feature_encoder_norm_layer:Literal['batchnorm','instancenorm']='batchnorm',
         # Context encoder
         context_encoder_layers=(32, 32, 64, 96, 160),
-        context_encoder_block:Literal['bottleneck','residualblock']='bottleneck',
+        context_encoder_block:Literal['bottleneck','residualblock']='residualblock',
         context_encoder_norm_layer=None,
         # Correlation block
         corr_block_num_levels=4,
