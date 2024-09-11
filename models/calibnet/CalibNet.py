@@ -48,9 +48,9 @@ class ResnetEncoder(nn.Module):
 class Aggregation(nn.Module):
     def __init__(self,inplanes=768,planes=96,final_feat=(2,4),dropout=0.0):
         super(Aggregation,self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=inplanes,out_channels=planes*4,kernel_size=3,stride=2,padding=1)
+        self.conv1 = nn.Conv2d(in_channels=inplanes,out_channels=planes*4,kernel_size=3,stride=1,padding=1)
         self.bn1 = nn.BatchNorm2d(planes*4)
-        self.conv2 = nn.Conv2d(in_channels=planes*4,out_channels=planes*4,kernel_size=3,stride=2,padding=1)
+        self.conv2 = nn.Conv2d(in_channels=planes*4,out_channels=planes*4,kernel_size=3,stride=1,padding=1)
         self.bn2 = nn.BatchNorm2d(planes*4)
         self.conv3 = nn.Conv2d(in_channels=planes*4,out_channels=planes*2,kernel_size=1,stride=1)
         self.bn3 = nn.BatchNorm2d(planes*2)
