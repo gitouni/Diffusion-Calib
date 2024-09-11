@@ -14,11 +14,11 @@ model:
     type: LCCRAFT
     argv:
       lccraft_argv:
-        feature_encoder_layers: [32, 32, 64, 96, 128]
-        feature_encoder_block: bottleneck
+        feature_encoder_layers: [64, 64, 128, 192, 256]
+        feature_encoder_block: residualblock
         feature_encoder_norm_layer: batchnorm
-        context_encoder_layers: [32, 32, 64, 96, 160]
-        context_encoder_block: bottleneck
+        context_encoder_layers: [64, 64, 128, 192, 256]
+        context_encoder_block: residualblock
         context_encoder_norm_layer: null
         corr_block_num_levels: 4
         corr_block_radius: 3
@@ -32,8 +32,8 @@ model:
         depth_gen_pooling_size: 1
         depth_gen_max_depth: 50.0
         feat_poooling_size: [2,4]
-        fps_num: 512
-      num_iters: 10
+        fps_num: 1024
+      num_iters: 5
   diffuser:
     beta_schedule:
       schedule: cosine

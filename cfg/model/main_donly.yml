@@ -1,30 +1,34 @@
 seed: 0
 device: cuda:0
 path:
-  name: lccnet
+  name: main_donly
   base_dir: experiments/resize/
   log: log
   results: results
   checkpoint: checkpoint
   resume: null
-  pretrain: &pretrained_model experiments/resize/lccnet/checkpoint/best_model.pth
+  pretrain: &pretrained_model experiments/resize/main_donly/checkpoint/best_model.pth
   
 model:
   surrogate:
-    type: LCCNet
+    type: ProjFusionNet  # Chosen from ['ProjFusionNet','LCCNet','CalibNet'], argv should match relative class as well
     argv:
-      lccnet_argv:
-        image_size: [256, 512]
-        use_feat_from: 1
-        md: 4
-        use_reflectance: false
-        dropout: 0.0
-        Action_Func: leakyrelu
-        attention: false
-        res_num: 18
-      pcd2depth_argv:
-        pooling_size: 1
+      activation: leakyrelu
+      inplace: true
+      encoder_argv:
+        resnet_depth: 18
+        resnet_pretrained: true
+        encoder_2d_chans: [256]
         max_depth: 50.0
+        proj_planes: 32
+        union_feat_size: [8, 16]
+      aggregation_argv:
+        planes: 96
+        final_feat: [2, 4]
+        mlp_dims: [256, 128]
+      proj_features: false
+      depth_features: true
+
   diffuser:
     beta_schedule:
       schedule: cosine
@@ -41,7 +45,6 @@ model:
       solver_type: dpmsolver
       atol: 0.005
       rtol: 0.05
-
 loss:
   type: mae
   args:
