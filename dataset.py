@@ -14,10 +14,10 @@ from PIL import Image
 from torch import Generator, randperm
 from torch.utils.data import Dataset, Subset, BatchSampler
 from typing import Iterable, List, Dict, Union, Optional, Tuple, Sequence, Literal
-from models.colmap.io import read_model, CAMERA_TYPE
+# from models.colmap.io import read_model, CAMERA_TYPE
 from models.tools.cmsc import nptran
 from models.util.transform import inv_pose_np
-from RANSAC.base import RotEstimator,TslEstimator,RotRANSAC, TslRANSAC
+# from RANSAC.base import RotEstimator,TslEstimator,RotRANSAC, TslRANSAC
 import re
 
 IMAGENET_MEAN=[0.485, 0.456, 0.406]

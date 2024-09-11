@@ -16,9 +16,9 @@ def se3_err(pred_se3:np.ndarray, gt_se3:np.ndarray) -> Tuple[np.ndarray,np.ndarr
 
 def options():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pred_dir_root",type=str,default="experiments/resize/lccraft/kitti/results/diffusion_10")
+    parser.add_argument("--pred_dir_root",type=str,default="experiments/resize/main_ponly/kitti/results/iterative_10")
     parser.add_argument("--gt_dir",type=str,default="cache/kitti_gt")
-    parser.add_argument("--log_file",type=str,default="log/lccraft_diff.log")
+    parser.add_argument("--log_file",type=str,default="log/main_ponly_iter10.log")
     return parser.parse_args()
 
 if __name__ == "__main__":
