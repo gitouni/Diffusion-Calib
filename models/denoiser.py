@@ -1,17 +1,20 @@
-from .tools.core import FusionNet, get_activation_func
+from .tools.core import FusionNet, FusionNetDepthOnly, FusionNetProjectOnly, get_activation_func
 from .util import se3
 # from .util.seq_utils import transformer_encoder_wrapper
 import torch.nn as nn
 import torch
 from typing import Dict, Callable, List, Tuple, Literal, Optional, Sequence
-from abc import abstractmethod, ABC
+from abc import abstractmethod
 from .calibnet.CalibNet import CalibNet as VanillaCalibNet
 from .lccnet.LCCNet import LCCNet as VanillaLCCNet
 from .lccraft.convgru import LCCRAFT as VanillaLCCRAFT
 from .tools.core import DepthImgGenerator, BasicBlock
 from functools import partial
 
-class Surrogate(ABC):
+class Surrogate(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
     @abstractmethod
     def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
         pass
@@ -24,7 +27,7 @@ class Surrogate(ABC):
     def clear_buffer(self):
         pass
 
-class CalibNet(Surrogate, nn.Module):
+class CalibNet(Surrogate):
     def __init__(self, calibnet_argv:Dict, pcd2depth_argv:Dict):
         super().__init__()
         self.encoder = VanillaCalibNet(**calibnet_argv)
@@ -43,7 +46,7 @@ class CalibNet(Surrogate, nn.Module):
     def clear_buffer(self):
         self.encoder.clear_buffer()
 
-class LCCNet(Surrogate, nn.Module):
+class LCCNet(Surrogate):
     def __init__(self, lccnet_argv:Dict, pcd2depth_argv:Dict):
         super().__init__()
         self.encoder = VanillaLCCNet(**lccnet_argv)
@@ -62,7 +65,7 @@ class LCCNet(Surrogate, nn.Module):
     def clear_buffer(self):
         self.encoder.clear_buffer()
 
-class LCCRAFT(Surrogate, nn.Module):
+class LCCRAFT(Surrogate):
     def __init__(self, lccraft_argv:Dict, num_iters:int) -> None:
         super().__init__()
         self.encoder = VanillaLCCRAFT(**lccraft_argv)
@@ -137,11 +140,19 @@ class Aggregation(nn.Module):
         x_tsl = self.tsl_fc(torch.flatten(x_tsl, start_dim=1))
         return torch.cat([x_rot, x_tsl], dim=1)
 
-class ProjFusionNet(Surrogate, nn.Module):
-    def __init__(self, activation:Literal['leakyrelu','relu','elu','gelu'], inplace:bool, encoder_argv:Dict, aggregation_argv:Dict) -> None:
+class ProjFusionNet(Surrogate):
+    def __init__(self, activation:Literal['leakyrelu','relu','elu','gelu'], inplace:bool, encoder_argv:Dict, aggregation_argv:Dict,
+            proj_features:bool=True, depth_features:bool=True) -> None:
         super().__init__()
+        assert proj_features or depth_features, 'at least either should be true.'
         activation_func = get_activation_func(activation, inplace)
-        self.encoder = FusionNet(**encoder_argv)
+        if proj_features and depth_features:
+            fusion_class = FusionNet
+        elif not proj_features:
+            fusion_class = FusionNetDepthOnly
+        else:
+            fusion_class = FusionNetProjectOnly
+        self.encoder = fusion_class(**encoder_argv)
         self.mlp = Aggregation(inplanes=self.encoder.out_dim, activation_fn=activation_func, **aggregation_argv)
 
     def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
