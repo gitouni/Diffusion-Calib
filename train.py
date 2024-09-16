@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.utils
 from torch.utils.data import DataLoader
 from dataset import BaseKITTIDataset, PerturbDataset, KITTIBatchSampler
-from models.denoiser import Denoiser, RAFTDenoiser, __classdict__ as DenoiserDict
+from models.denoiser import Surrogate, Denoiser, RGGDenoiser, RAFTDenoiser, __classdict__ as DenoiserDict
 from models.diffuser import Diffuser
 from models.lr_scheduler import get_lr_scheduler
 from models.loss import get_loss, geodesic_loss
@@ -88,15 +88,20 @@ def main(config:Dict, config_path:Union[str, Iterable[str]]):
     device = config['device']
     # torch.backends.cudnn.benchmark=True
     # torch.backends.cudnn.enabled = False
-    surrogate_model = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
-    denoiser_class = RAFTDenoiser if config['model']['surrogate']['type'] == 'LCCRAFT' else Denoiser
+    surrogate_model:Surrogate = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
+    if config['model']['surrogate']['type'] == 'LCCRAFT':
+        denoiser_class = RAFTDenoiser
+    elif config['model']['surrogate']['type'] == 'RGGNet':
+        denoiser_class = RGGDenoiser
+    else:
+        denoiser_class = Denoiser
     denoiser = denoiser_class(surrogate_model)
     diffuser = Diffuser(denoiser, **config['model']['diffuser'])
     dataset_argv = config['dataset']['train']
     train_dataloader, val_dataloader = get_dataloader(dataset_argv['dataset']['train']['base'], dataset_argv['dataset']['train']['main'],
         dataset_argv['dataset']['val']['base'], dataset_argv['dataset']['val']['main'],
         dataset_argv['dataloader']['args'], dataset_argv['dataloader']['val_args'])
-    optimizer = torch.optim.Adam(surrogate_model.parameters(), **config['optimizer']['args'])
+    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, surrogate_model.parameters()), **config['optimizer']['args'])
     clip_grad = config['optimizer']['max_grad']
     scheduler = get_lr_scheduler(optimizer, config['scheduler']['type'], **config['scheduler']['args'])
     loss_func = get_loss(config['loss']['type'], **config['loss']['args'])
@@ -159,6 +164,10 @@ def main(config:Dict, config_path:Union[str, Iterable[str]]):
                     iterator.set_postfix(state='nan')
                     iterator.update(1)
                     exit(1)
+                if isinstance(diffuser.x0_fn, RGGDenoiser):
+                    with torch.enable_grad():
+                        ELBO = diffuser.x0_fn.loss(x0_hat, (img, pcd, init_extran, camera_info))
+                    loss = loss + ELBO
                 loss.backward()
                 nn.utils.clip_grad_norm_(diffuser.x0_fn.model.parameters(), max_norm=clip_grad, norm_type=2)  # avoid gradient explosion
                 optimizer.step()
@@ -185,7 +194,7 @@ def main(config:Dict, config_path:Union[str, Iterable[str]]):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_config', default="cfg/dataset/kitti_small.yml", type=str)
-    parser.add_argument("--model_config",type=str,default="cfg/model/main_ponly.yml")
+    parser.add_argument("--model_config",type=str,default="cfg/model/calibnet.yml")
     args = parser.parse_args()
     dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
     config = yaml.load(open(args.model_config,'r'), yaml.SafeLoader)
