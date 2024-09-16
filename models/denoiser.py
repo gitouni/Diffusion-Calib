@@ -6,6 +6,7 @@ import torch
 from typing import Dict, Callable, List, Tuple, Literal, Optional, Sequence
 from abc import abstractmethod
 from .calibnet.CalibNet import CalibNet as VanillaCalibNet
+from .rggnet.rggnet import RGGNet as VanillaRGGNet
 from .lccnet.LCCNet import LCCNet as VanillaLCCNet
 from .lccraft.convgru import LCCRAFT as VanillaLCCRAFT
 from .tools.core import DepthImgGenerator, BasicBlock
@@ -46,6 +47,31 @@ class CalibNet(Surrogate):
     def clear_buffer(self):
         self.encoder.clear_buffer()
 
+class RGGNet(Surrogate):
+    def __init__(self, rggnet_argv:Dict, pcd2depth_argv:Dict, kld_weight:float, ELBO_weight:float):
+        super().__init__()
+        self.encoder = VanillaRGGNet(**rggnet_argv)
+        self.pcd2depth = DepthImgGenerator(**pcd2depth_argv)
+        self.kld_weight = kld_weight
+        self.elbo_weight = ELBO_weight
+
+    def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
+        # pcd_norm = torch.linalg.norm(pcd, dim=1)  # (B, N)
+        pcd_tf = se3.transform(Tcl, pcd)
+        depth_img = self.pcd2depth.project(pcd_tf, camera_info)
+        x0 = self.encoder(img, depth_img)  # (B, D)
+        return x0  # (B, x_dim)
+    
+    def restore_buffer(self, img:torch.Tensor, pcd:torch.Tensor):
+        self.encoder.restore_buffer(img)
+
+    def clear_buffer(self):
+        self.encoder.clear_buffer()
+    
+    def loss(self, rgb:torch.Tensor, depth:torch.Tensor):
+        ELBO = self.encoder.compute_ELBO(rgb, depth, kld_weight=self.kld_weight)
+        return ELBO * self.elbo_weight
+
 class LCCNet(Surrogate):
     def __init__(self, lccnet_argv:Dict, pcd2depth_argv:Dict):
         super().__init__()
@@ -75,7 +101,7 @@ class LCCRAFT(Surrogate):
         # pcd_norm = torch.linalg.norm(pcd, dim=1)  # (B, N)
         pcd_tf = se3.transform(Tcl, pcd)
         x0 = self.encoder(img, pcd_tf, camera_info, self.num_iters) # (B, D)
-        return x0  # (B, x_dim)
+        return x0  # List of (B, x_dim)
     
     def restore_buffer(self, img:torch.Tensor, pcd:torch.Tensor):
         self.encoder.restore_buffer(img)
@@ -187,6 +213,32 @@ class Denoiser(nn.Module):
         x0 = se3.exp(delta_x0) @ se3_x_t  # sequentially transformed by se3_x_t and x0
         return se3.log(x0)
 
+class RGGDenoiser(nn.Module):
+    def __init__(self, model:RGGNet):
+        super().__init__()
+        self.model = model
+
+    def restore_buffer(self, x_cond:Tuple[torch.Tensor, torch.Tensor]):
+        img, pcd = x_cond
+        self.model.restore_buffer(img, pcd)
+
+    def clear_buffer(self):
+        self.model.clear_buffer()
+
+    def forward(self, x_t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]):
+        img, pcd, Tcl, camera_info = x_cond
+        se3_x_t = se3.exp(x_t)
+        Tcl = se3_x_t @ Tcl
+        delta_x0 = self.model(img, pcd, Tcl, camera_info)
+        x0 = se3.exp(delta_x0) @ se3_x_t  # sequentially transformed by se3_x_t and x0
+        return se3.log(x0)
+    
+    def loss(self, x0_hat:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]):
+        img, pcd, Tcl, camera_info = x_cond
+        Tcl = se3.exp(x0_hat) @ Tcl
+        depth = self.model.pcd2depth.project(pcd, camera_info)
+        return self.model.loss(img, depth)
+
 class RAFTDenoiser(nn.Module):
     def __init__(self, model:LCCRAFT):
         super().__init__()
@@ -292,4 +344,4 @@ class RAFTDenoiser(nn.Module):
 #         x0 = self.mlps(feat[:,-1,:])  # the final token has cross attention with other tokens
 #         return x0  # (B, x_dim)
         
-__classdict__ = {'ProjFusionNet':ProjFusionNet, 'LCCNet':LCCNet, 'CalibNet':CalibNet, 'LCCRAFT':LCCRAFT}
+__classdict__ = {'ProjFusionNet':ProjFusionNet, 'LCCNet':LCCNet, 'CalibNet':CalibNet, 'LCCRAFT':LCCRAFT, 'RGGNet':RGGNet}

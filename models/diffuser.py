@@ -7,10 +7,12 @@ import numpy as np
 from tqdm import tqdm
 from typing import Union, Tuple, Literal, Iterable, Dict, Callable, Optional
 from .util import se3
-from .denoiser import Denoiser, RAFTDenoiser
+from .denoiser import Denoiser, RAFTDenoiser, RGGDenoiser, Surrogate
+from .diffusion_scheduler import DiffusionScheduler
 from .dpm import NoiseScheduleVP, DPM_Solver, model_wrapper
 from .tools.cmsc import CBABatchCorr, CABatchCorr
 from .util.transform import inv_pose
+from .loss import geodesic_loss
 
 def exists(x):
 	return x is not None
@@ -144,17 +146,15 @@ class BaseNetwork(nn.Module):
 					m.init_weights(self.init_type, self.gain)
 
 class Diffuser(BaseNetwork):
-	def __init__(self, denoiser:Union[Denoiser,RAFTDenoiser], beta_schedule:Dict, dpm_argv:Dict, **kwargs):
+	def __init__(self, denoiser:Union[Denoiser,RAFTDenoiser,RGGDenoiser], beta_schedule:Dict, dpm_argv:Dict, **kwargs):
 		"""Diffuser
 
 		Args:
 			denoiser (Denoiser): Denoiser D(I, P, T_CL)
 			beta_schedule (Dict): _description_
 			dpm_argv (Dict): _description_
-			train_mode (bool): only works when denoiser is RAFTDenoiser. When train_mode=True, return sequnces of x0; else return [-1] as prediction
 		"""
 		super(Diffuser, self).__init__(**kwargs)
-		
 		self.beta_schedule = beta_schedule
 		self.dpm_argv = dpm_argv
 		self.x0_fn = denoiser
@@ -162,8 +162,6 @@ class Diffuser(BaseNetwork):
 			self.seq_loss = True
 		else:
 			self.seq_loss = False
-
-
 
 	@staticmethod
 	def to_torch(x:Iterable[float], dtype=torch.float32, device=torch.device('cuda')):
@@ -412,7 +410,66 @@ class Diffuser(BaseNetwork):
 			x_0_hat = x_0_hat[-1]
 		return loss, x_0_hat
 
+class SE3Diffuser:
+	def __init__(self, surrogate:Surrogate, train_scheduler_argv:Dict, val_scheduler_argv:Dict):
+		self.model = surrogate
+		self.train_scheduler = DiffusionScheduler(train_scheduler_argv)
+		self.train_scheduler_argv = train_scheduler_argv
+		self.val_scheduler = DiffusionScheduler(val_scheduler_argv)
+		self.val_scheduler_argv = val_scheduler_argv
 
+	def set_loss(self, loss_fn):
+		self.loss_fn = loss_fn
+
+	def sampling(self, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict], return_intermediate:bool=False):
+		img, pcd, Tcl, camera_info = x_cond
+		B = img.shape[0]
+		H_t = torch.eye(4).unsqueeze(0).expand(B, -1, -1).to(Tcl)
+		H_t_list = [H_t.clone()]
+		for t in range(self.val_scheduler_argv['n_diff_steps'], 0, -1):  # [T, T-1, ..., 1]
+			pred_x = self.model(img, pcd, H_t @ Tcl, camera_info)
+			delta_H_t = se3.exp(pred_x)  # (B, 4, 4)
+			H_0 = delta_H_t @ H_t  # accumulate transformations
+			gamma0 = self.val_scheduler.gamma0[t]
+			gamma1 = self.val_scheduler.gamma1[t]
+			H_t = se3.exp(gamma0 * se3.log(H_0) + gamma1 * se3.log(H_t))
+			### noise
+			if self.val_scheduler_argv['add_noise'] and t > 1:
+				alpha_bar = self.val_scheduler.alpha_bars[t]
+				alpha_bar_ = self.val_scheduler.alpha_bars[t-1]
+				beta = self.val_scheduler.betas[t]
+				cc = ((1 - alpha_bar_) / (1.- alpha_bar)) * beta
+				scale = torch.cat([torch.ones(3) * self.val_scheduler_argv['sigma_r'], torch.ones(3) * self.val_scheduler_argv['sigma_t']])[None].to(Tcl)  # [1, 6]
+				noise = torch.sqrt(cc) * scale * torch.randn(B, 6).to(Tcl)  # [B, 6]
+				H_noise = se3.exp(noise)
+				H_t = H_noise @ H_t  # [B, 4, 4]
+			H_t_list.append(H_t.clone())
+		if return_intermediate:
+			return H_t_list
+		else:
+			return H_t
+	
+	def forward(self, H_0:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, Dict]):
+		img, pcd, Tcl, camera_info = x_cond
+		B = img.shape[0]
+		H_T = torch.eye(4).unsqueeze(0).expand(B, -1, -1).to(H_0)
+		B = H_0.shape[0]
+		taus = self.train_scheduler.uniform_sample_t(B)
+		alpha_bars = self.train_scheduler.alpha_bars[taus].to(H_0).unsqueeze(1)  # [B, 1]
+		H_t = se3.exp((1. - torch.sqrt(alpha_bars)) * se3.log(H_T @ inv_pose(H_0))) @ H_0
+
+		### add noise
+		if self.train_scheduler_argv['add_noise']:
+			scale = torch.cat([torch.ones(3) * self.train_scheduler_argv['sigma_r'], torch.ones(3) * self.train_scheduler_argv['sigma_t']]).unsqueeze(0).to(H_0)  # [1, 6]
+			noise = torch.sqrt(1. - alpha_bars) * scale * torch.clamp(torch.randn(B, 6), -3, 3).to(H_0)  # [B, 6]
+			H_noise = se3.exp(noise)
+			H_t_noise = H_noise @ H_t  # [B, 4, 4]
+		else:
+			H_t_noise = H_t
+		pred_x = self.model(img, pcd,  H_t_noise @ Tcl, camera_info)
+		pred_se3 = se3.exp(pred_x) @ H_t_noise
+		R_loss, t_loss = geodesic_loss(pred_se3, H_0)
+		return R_loss, t_loss
 
 class GuidanceSampler:
 	def __init__(self, loss_fn:Callable, cba_data:Dict, ca_data:Dict, cba_argv:Dict, ca_argv:Dict):
