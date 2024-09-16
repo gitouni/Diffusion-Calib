@@ -1,37 +1,38 @@
-# ProjFusion without depth feature F_D
 seed: 0
 device: cuda:0
 path:
-  name: main_ponly
+  name: rggnet
   base_dir: experiments/resize/
   log: log
   results: results
   checkpoint: checkpoint
   resume: null
-  pretrain: &pretrained_model experiments/resize/main_ponly/checkpoint/best_model.pth
+  pretrain: &pretrained_model experiments/resize/rggnet/checkpoint/best_model.pth
   
 model:
   surrogate:
-    type: ProjFusionNet  # Chosen from ['ProjFusionNet','LCCNet','CalibNet'], argv should match relative class as well
+    type: RGGNet
     argv:
-      activation: leakyrelu
-      inplace: true
-      encoder_argv:
+      rggnet_argv:
+        vae_path: experiments/resize/vae/checkpoint/best_model.pth
+        vae_argv:
+          img_size: [256, 512]
+          in_chan: 4
+          latent_dim: 100
+          hidden_dims: [64, 128, 64, 32]
+          activation: leakyrelu
+          inplace: true
         resnet_depth: 18
         resnet_pretrained: true
-        encoder_2d_chans: [256]
-        encoder_3d_chans: [32, 64, 128, 256]
-        pcd_pyramid: [4096, 2048, 1024, 512]
-        encoder_3d_knn: 16
-        fusion_knn: 4
-        union_feat_size: [8, 16]
-      aggregation_argv:
-        planes: 96
-        final_feat: [2, 4]
-        mlp_dims: [256, 128]
-      proj_features: true
-      depth_features: false
-
+        mlp_head_dims: [512, 128]
+        mlp_sub_dims: [128]
+        activation: relu
+        inplace: true
+      pcd2depth_argv:
+        pooling_size: 1
+        max_depth: 50.0
+      kld_weight: 1.0E-6
+      ELBO_weight: 1.0E-2
   diffuser:
     beta_schedule:
       schedule: cosine
@@ -48,6 +49,7 @@ model:
       solver_type: dpmsolver
       atol: 0.005
       rtol: 0.05
+
 loss:
   type: mae
   args:

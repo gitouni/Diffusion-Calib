@@ -1,3 +1,4 @@
+# ProjFusion without projection feature F_P
 seed: 0
 device: cuda:0
 path:

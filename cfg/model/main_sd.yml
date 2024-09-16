@@ -1,14 +1,14 @@
-# ProjFusion without depth feature F_D
+# ProjFusion implemented with SE(3) Diffusion
 seed: 0
 device: cuda:0
 path:
-  name: main_ponly
+  name: main_sd
   base_dir: experiments/resize/
   log: log
   results: results
   checkpoint: checkpoint
   resume: null
-  pretrain: &pretrained_model experiments/resize/main_ponly/checkpoint/best_model.pth
+  pretrain: &pretrained_model experiments/resize/main_sd/checkpoint/best_model.pth
   
 model:
   surrogate:
@@ -22,6 +22,8 @@ model:
         encoder_2d_chans: [256]
         encoder_3d_chans: [32, 64, 128, 256]
         pcd_pyramid: [4096, 2048, 1024, 512]
+        max_depth: 50.0
+        proj_planes: 32
         encoder_3d_knn: 16
         fusion_knn: 4
         union_feat_size: [8, 16]
@@ -29,25 +31,23 @@ model:
         planes: 96
         final_feat: [2, 4]
         mlp_dims: [256, 128]
-      proj_features: true
-      depth_features: false
-
-  diffuser:
-    beta_schedule:
-      schedule: cosine
-      n_timestep: 1000
-      linear_start: 1.0E-4
-      linear_end: 0.02
-    dpm_argv:
-      steps: 10
-      order: 3
-      skip_type: logSNR
-      method: multistep
-      lower_order_final: false
-      denoise_to_zero: false
-      solver_type: dpmsolver
-      atol: 0.005
-      rtol: 0.05
+  diffusion_scheduler:
+    train:
+      schedule_type: cosine
+      n_diff_steps: 200
+      beta_1: 1.0E-4
+      beta_T: 0.05
+      sigma_r: 0.05
+      sigma_t: 0.03
+      add_noise: true
+    val:
+      schedule_type: cosine
+      n_diff_steps: 5
+      beta_1: 0.2
+      beta_T: 0.8
+      sigma_r: 0.1
+      sigma_t: 0.01
+      add_noise: true
 loss:
   type: mae
   args:

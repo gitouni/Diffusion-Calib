@@ -49,7 +49,7 @@ loss:
 
 optimizer:
   args:
-    lr: 3.0E-4
+    lr: 1.0E-4
     betas: [0.9, 0.999]
   max_grad: 1.0
 
