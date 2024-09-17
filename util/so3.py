@@ -86,7 +86,7 @@ def log(g):
     eps = 1.0e-7
     R = g.view(-1, 3, 3)
     tr = btrace(R)
-    c = (tr - 1) / 2
+    c = torch.clip((tr - 1) / 2, -1.0, 1.0)
     t = torch.acos(c)
     sc = sinc1(t)
     idx0 = (torch.abs(sc) <= eps)
