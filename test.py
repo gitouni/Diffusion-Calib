@@ -2,6 +2,7 @@ import os
 import shutil
 import numpy as np
 import argparse
+from torchinfo import summary
 import torch
 from torch.utils.data import DataLoader
 from dataset import PerturbDataset
@@ -17,6 +18,7 @@ from core.tools import load_checkpoint_model_only
 import logging
 from pathlib import Path
 from typing import Dict, Literal, Iterable
+import time
 
 
 def get_dataloader(test_dataset_argv:Iterable[Dict], test_dataloader_argv:Dict, dataset_type:str):
@@ -41,7 +43,7 @@ def test_diffuser(test_loader:DataLoader, name:str, diffuser:Diffuser, logger:lo
     diffuser.x0_fn.model.eval()
     logger.info("Test:")
     iterator = tqdm(test_loader, desc=name)
-    tracker = LogTracker('Rx','Ry','Rz','tx','ty','tz','R','t','3deg3cm','5deg5cm')
+    tracker = LogTracker('Rx','Ry','Rz','tx','ty','tz','R','t','3d3c','5d5c','time')
     cnt = 0
     with iterator:
         N_valid = len(test_loader)
@@ -52,7 +54,10 @@ def test_diffuser(test_loader:DataLoader, name:str, diffuser:Diffuser, logger:lo
             gt_se3 = batch['gt'].to(device)  # transform uncalibrated_pcd to calibrated_pcd
             gt_x = se3.log(gt_se3)
             camera_info = batch['camera_info']
-            x0_hat, x0_list = diffuser.dpm_sampling(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info), return_intermediate=True)
+            t0 = time.time()
+            x0_hat, x0_list = diffuser.sample_fn(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info), return_intermediate=True)
+            dt = time.time() - t0
+            tracker.update('time', dt)
             x0_list = [to_npy(se3.log(se3.exp(x0) @ init_extran)) for x0 in x0_list]
             batched_x0_list = np.stack(x0_list, axis=1)  # (B, K, 6)
             for x0 in batched_x0_list:
@@ -62,7 +67,7 @@ def test_diffuser(test_loader:DataLoader, name:str, diffuser:Diffuser, logger:lo
             R_err, t_err = se3_err(x0_se3, gt_se3)
             R_err = torch.rad2deg(R_err)  # log degree
             if torch.isnan(R_err).sum() + torch.isnan(t_err).sum() > 0:
-                logger.warn("nan value detected, skip this batch.")
+                logger.warning("nan value detected, skip this batch.")
                 N_valid -= 1
                 continue
             batch_n = len(gt_se3)
@@ -76,12 +81,13 @@ def test_diffuser(test_loader:DataLoader, name:str, diffuser:Diffuser, logger:lo
             t_rmse = torch.linalg.norm(t_err, dim=1)
             tracker.update('R',R_rmse.mean().item(), batch_n)
             tracker.update('t',t_rmse.mean().item(), batch_n)
-            tracker.update('3deg3cm', torch.sum(torch.logical_and(R_rmse < 3, t_rmse < 0.03)).item() / batch_n, batch_n)
-            tracker.update('5deg5cm', torch.sum(torch.logical_and(R_rmse < 5, t_rmse < 0.05)).item() / batch_n, batch_n)
+            tracker.update('3d3c', torch.sum(torch.logical_and(R_rmse < 3, t_rmse < 0.03)).item() / batch_n, batch_n)
+            tracker.update('5d5c', torch.sum(torch.logical_and(R_rmse < 5, t_rmse < 0.05)).item() / batch_n, batch_n)
             iterator.set_postfix(tracker.result())
             iterator.update(1)
             if (i+1) % log_per_iter == 0:
                 logger.info("\tBatch:{}|{}: {}".format(i+1, len(test_loader), tracker.result()))
+                
     assert N_valid > 0, "Fatal Error, no valid batch!"
     return tracker.result(), N_valid / len(test_loader)
 
@@ -135,7 +141,7 @@ def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:log
     model.eval()
     logger.info("Test:")
     iterator = tqdm(test_loader, desc=name)
-    tracker = LogTracker('Rx','Ry','Rz','tx','ty','tz','R','t','3deg3cm','5deg5cm')
+    tracker = LogTracker('Rx','Ry','Rz','tx','ty','tz','R','t','3d3c','5d5c','time')
     cnt = 0
     with iterator:
         N_valid = len(test_loader)
@@ -146,8 +152,9 @@ def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:log
             gt_se3 = batch['gt'].to(device)  # transform uncalibrated_pcd to calibrated_pcd
             camera_info = batch['camera_info']
             H0 = torch.eye(4).unsqueeze(0).to(gt_se3)
-            model.restore_buffer(img,pcd)
+            model.restore_buffer(img, pcd)
             x0_list = []
+            t0 = time.time()
             for _ in range(iters):
                 pcd_tf = se3.transform(H0, pcd)
                 delta_x = model.forward(img, pcd_tf, H0 @ init_extran, camera_info)
@@ -157,6 +164,8 @@ def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:log
                     H0 = se3.exp(delta_x) @ H0
                 save_x = to_npy(se3.log(H0 @ init_extran))  # (6,)
                 x0_list.append(save_x)
+            dt = time.time() - t0
+            tracker.update('time',dt)
             batched_x0_list = np.stack(x0_list, axis=1)  # (B, K, 6)
             for x0 in batched_x0_list:
                 np.savetxt(res_dir.joinpath("%06d.txt"%cnt), x0)
@@ -165,7 +174,7 @@ def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:log
             R_err, t_err = se3_err(H0, gt_se3)
             R_err = torch.rad2deg(R_err)  # log degree
             if torch.isnan(R_err).sum() + torch.isnan(t_err).sum() > 0:
-                logger.warn("nan value detected, skip this batch.")
+                logger.warning("nan value detected, skip this batch.")
                 N_valid -= 1
                 continue
             batch_n = len(gt_se3)
@@ -179,8 +188,8 @@ def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:log
             t_rmse = torch.linalg.norm(t_err, dim=1)
             tracker.update('R',R_rmse.mean().item(), batch_n)
             tracker.update('t',t_rmse.mean().item(), batch_n)
-            tracker.update('3deg3cm', torch.sum(torch.logical_and(R_rmse < 3, t_rmse < 0.03)).item() / batch_n, batch_n)
-            tracker.update('5deg5cm', torch.sum(torch.logical_and(R_rmse < 5, t_rmse < 0.05)).item() / batch_n, batch_n)
+            tracker.update('3d3c', torch.sum(torch.logical_and(R_rmse < 3, t_rmse < 0.03)).item() / batch_n, batch_n)
+            tracker.update('5d5c', torch.sum(torch.logical_and(R_rmse < 5, t_rmse < 0.05)).item() / batch_n, batch_n)
             iterator.set_postfix(tracker.result())
             iterator.update(1)
             if (i+1) % log_per_iter == 0:
@@ -192,21 +201,17 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
     np.random.seed(config['seed'])
     torch.manual_seed(config['seed'])
     device = config['device']
-    surrogate_model = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
+    surrogate_model:Surrogate = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
     denoiser_class = RAFTDenoiser if config['model']['surrogate']['type'] == 'LCCRAFT' else Denoiser
     denoiser = denoiser_class(surrogate_model)
     dataset_argv = config['dataset']['test']
     dataset_type = config['dataset']['type']
     name_list, dataloader_list = get_dataloader(dataset_argv['dataset'], dataset_argv['dataloader'], dataset_type)
-    if 'diffusion' in model_type:
+    if model_type == 'diffusion':
         diffuser = Diffuser(denoiser, **config['model']['diffuser'])
         loss_func = get_loss(config['loss']['type'], **config['loss']['args'])
         diffuser.set_loss(loss_func)
         diffuser.set_new_noise_schedule(device)
-        # if model_type == 'diffusion-guidance':
-        #     probnet = ProbNet(**config['model']['probnet']['argv']).to(device)
-        #     probnet.mlp.load_state_dict(torch.load(config['model']['probnet']['mlp_pretrained'])['model'])
-        #     classifier_fn_argv = config['model']['probnet']['cls_argv']
     run_argv = config['run']
     path_argv = config['path']
     experiment_dir = Path(path_argv['base_dir'])
@@ -219,19 +224,22 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
     checkpoints_dir.mkdir(exist_ok=True)
     log_dir = experiment_dir.joinpath(path_argv['log'])
     log_dir.mkdir(exist_ok=True)
-    shutil.copyfile(config_path, str(log_dir.joinpath(os.path.basename(config_path))))  # copy the config file
+    # shutil.copyfile(config_path, str(log_dir.joinpath(os.path.basename(config_path))))  # copy the config file
     # logger
     logger = logging.getLogger(path_argv['log'])
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger_mode = 'w'
-    steps = config['model']['diffuser']['dpm_argv']['steps'] if 'diffusion' in model_type else iters
-    name = "{}_{}".format(model_type, steps)
+    steps = config['model']['diffuser']['sampling_argv']['steps'] if 'diffusion' in model_type else iters
+    if model_type == 'diffusion':
+        name = "{}_{}".format(diffuser.sampling_type, steps)
+    else:
+        name = "{}_{}".format(model_type, steps)
     res_dir = experiment_dir.joinpath(path_argv['results']).joinpath(name)
     if res_dir.exists():
         shutil.rmtree(str(res_dir))
     res_dir.mkdir(exist_ok=True,parents=True)
-    file_handler = logging.FileHandler(str(log_dir) + '/test_{}_{}.log'.format(model_type, steps), mode=logger_mode)
+    file_handler = logging.FileHandler(str(log_dir) + '/test_{}.log'.format(name), mode=logger_mode)
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
@@ -243,7 +251,8 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
         logger.info("Loaded checkpoint from {}".format(path_argv['pretrain']))
     else:
         raise FileNotFoundError("'pretrain' cannot be set to 'None' during test-time")
-    ## training
+    # summary(surrogate_model)  # print the volume of model parameters
+    ## testing
     record_list = []
     for name, dataloader in zip(name_list, dataloader_list):
         surrogate_model.train()
@@ -266,10 +275,10 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_config', default="cfg/dataset/kitti.yml", type=str)
-    parser.add_argument("--model_config",type=str,default="cfg/model/calibnet.yml")
-    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='iterative')
-    parser.add_argument("--iters",type=int,default=10)
+    parser.add_argument('--dataset_config', default="cfg/dataset/kitti_large.yml", type=str)
+    parser.add_argument("--model_config",type=str,default="cfg/unipc_model/calibnet.yml")
+    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='diffusion')
+    parser.add_argument("--iters",type=int,default=1)
     args = parser.parse_args()
     dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
     config = yaml.load(open(args.model_config,'r'), yaml.SafeLoader)

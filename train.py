@@ -123,11 +123,13 @@ def main(config:Dict, config_path:Union[str, Iterable[str]]):
         for path in config_path:
             shutil.copyfile(path, str(log_dir.joinpath(os.path.basename(path))))  # copy the config file
     # logger
+    steps = config['model']['diffuser']['sampling_argv']['steps']
+    name = "{}_{}".format(diffuser.sampling_type, steps)
     logger = logging.getLogger(path_argv['log'])
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger_mode = 'a' if path_argv['resume'] is not None else 'w'
-    file_handler = logging.FileHandler(str(log_dir) + '/train.log', mode=logger_mode)
+    file_handler = logging.FileHandler(str(log_dir) + '/train_{}.log'.format(name), mode=logger_mode)
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
@@ -160,10 +162,11 @@ def main(config:Dict, config_path:Union[str, Iterable[str]]):
                 # R_loss, t_loss = geodesic_loss(se3.exp(x0_hat), gt_se3)
                 # loss = R_loss + t_loss
                 if torch.isnan(loss).sum() > 0:
-                    logger.warning("nan detected, training failed.")
+                    logger.warning("nan detected, skip this step.")
                     iterator.set_postfix(state='nan')
                     iterator.update(1)
-                    exit(1)
+                    optimizer.zero_grad()
+                    continue
                 if isinstance(diffuser.x0_fn, RGGDenoiser):
                     with torch.enable_grad():
                         ELBO = diffuser.x0_fn.loss(x0_hat, (img, pcd, init_extran, camera_info))
@@ -193,8 +196,8 @@ def main(config:Dict, config_path:Union[str, Iterable[str]]):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_config', default="cfg/dataset/kitti_small.yml", type=str)
-    parser.add_argument("--model_config",type=str,default="cfg/model/calibnet.yml")
+    parser.add_argument('--dataset_config', default="cfg/dataset/kitti_large.yml", type=str)
+    parser.add_argument("--model_config",type=str,default="cfg/unipc_model/calibnet.yml")
     args = parser.parse_args()
     dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
     config = yaml.load(open(args.model_config,'r'), yaml.SafeLoader)
