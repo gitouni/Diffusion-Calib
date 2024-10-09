@@ -7,13 +7,14 @@ import numpy as np
 from tqdm import tqdm
 from typing import Union, Tuple, Literal, Iterable, Dict, Callable, Optional
 from .util import se3
-from .denoiser import Denoiser, RAFTDenoiser, RGGDenoiser, Surrogate
+from .denoiser import Denoiser, RAFTDenoiser, RGGDenoiser, Surrogate, LCCRAFT
 from .diffusion_scheduler import DiffusionScheduler
 from .dpm import NoiseScheduleVP, DPM_Solver, model_wrapper
+from .unipc import UniPC
 from .tools.cmsc import CBABatchCorr, CABatchCorr
 from .util.transform import inv_pose
 from .loss import geodesic_loss
-
+from .tools.utils import timer
 def exists(x):
 	return x is not None
 
@@ -146,17 +147,24 @@ class BaseNetwork(nn.Module):
 					m.init_weights(self.init_type, self.gain)
 
 class Diffuser(BaseNetwork):
-	def __init__(self, denoiser:Union[Denoiser,RAFTDenoiser,RGGDenoiser], beta_schedule:Dict, dpm_argv:Dict, **kwargs):
+	def __init__(self, denoiser:Union[Denoiser,RAFTDenoiser,RGGDenoiser], beta_schedule:Dict, sampling_argv:Dict, sampling_type:Literal['dpm','unipc'], **kwargs):
 		"""Diffuser
 
 		Args:
 			denoiser (Denoiser): Denoiser D(I, P, T_CL)
 			beta_schedule (Dict): _description_
-			dpm_argv (Dict): _description_
+			sampling_argv (Dict): _description_
 		"""
 		super(Diffuser, self).__init__(**kwargs)
 		self.beta_schedule = beta_schedule
-		self.dpm_argv = dpm_argv
+		self.sampling_argv = sampling_argv
+		self.sampling_type = sampling_type
+		if sampling_type == 'dpm':
+			self.sample_fn = self.dpm_sampling
+		elif sampling_type == 'unipc':
+			self.sample_fn = self.unipc_sampling
+		else:
+			raise NotImplementedError("sampling type must be 'dpm' or 'unipc'.")
 		self.x0_fn = denoiser
 		if isinstance(denoiser, RAFTDenoiser):
 			self.seq_loss = True
@@ -245,7 +253,7 @@ class Diffuser(BaseNetwork):
 		self.x0_fn.clear_buffer()
 		return x_t
 	
-
+	
 	@torch.inference_mode()
 	def dpm_sampling(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict], return_intermediate:bool=False) -> torch.Tensor:
 		def model_fn(x_t:torch.Tensor, t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]):
@@ -265,28 +273,71 @@ class Diffuser(BaseNetwork):
 			model_type='x_start',
 			guidance_type='uncond'
 		)
-		dpm_solver = DPM_Solver(
+		solver = DPM_Solver(
 			model_fn_continuous,
 			noise_schedule,
 			algorithm_type="dpmsolver++"
 		)
 		if return_intermediate:
-			x_0_hat, intermidates = dpm_solver.sample(
+			x_0_hat, intermidates = solver.sample(
 				x_T,
-				**self.dpm_argv,
+				**self.sampling_argv,
 				return_intermediate=True
 			)
 			self.x0_fn.clear_buffer()
 			return x_0_hat, intermidates
 		else:
-			x_0_hat = dpm_solver.sample(
+			x_0_hat = solver.sample(
 				x_T,
-				**self.dpm_argv,
+				**self.sampling_argv,
 				return_intermediate=False
 			)
 			self.x0_fn.clear_buffer()
 			return x_0_hat
 	
+	@torch.inference_mode()
+	def unipc_sampling(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict], return_intermediate:bool=False) -> torch.Tensor:
+		def model_fn(x_t:torch.Tensor, t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]):
+			out = self.x0_fn.forward(x_t, x_cond)
+			if self.seq_loss:
+				out = out[-1]
+			# If the model outputs both 'mean' and 'variance' (such as improved-DDPM and guided-diffusion),
+			# We only use the 'mean' output for DPM-Solver, because DPM-Solver is based on diffusion ODEs.
+			return out
+		self.x0_fn.clear_buffer()
+		self.x0_fn.restore_buffer(x_cond[:2])  # img, pcd, init_Tcl, camera_info
+		noise_schedule = NoiseScheduleVP(schedule='discrete', alphas_cumprod=self.gammas)
+		model_fn_continuous = model_wrapper(
+			model_fn,
+			noise_schedule,
+			model_kwargs={"x_cond":x_cond},
+			model_type='x_start',
+			guidance_type='uncond'
+		)
+		solver = UniPC(
+			model_fn_continuous,
+			noise_schedule,
+			algorithm_type="data_prediction",
+			variant='bh1'
+		)
+		if return_intermediate:
+			x_0_hat, intermidates = solver.sample(
+				x_T,
+				**self.sampling_argv,
+				return_intermediate=True
+			)
+			self.x0_fn.clear_buffer()
+			return x_0_hat, intermidates
+		else:
+			x_0_hat = solver.sample(
+				x_T,
+				**self.sampling_argv,
+				return_intermediate=False
+			)
+			self.x0_fn.clear_buffer()
+			return x_0_hat
+
+
 	@torch.no_grad()
 	def dpm_sampling_guidance(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict],
 			classifier_fn_argv:Dict, classifer_fn:Callable, return_intermediate:bool=False) -> torch.Tensor:
@@ -311,23 +362,23 @@ class Diffuser(BaseNetwork):
 			classifier_kwargs=dict(x_cond=x_cond),
 			**classifier_fn_argv
 		)
-		dpm_solver = DPM_Solver(
+		solver = DPM_Solver(
 			model_fn_continuous,
 			noise_schedule,
 			algorithm_type="dpmsolver++"
 		)
 		if return_intermediate:
-			x_0_hat, intermidates = dpm_solver.sample(
+			x_0_hat, intermidates = solver.sample(
 				x_T,
-				**self.dpm_argv,
+				**self.sampling_argv,
 				return_intermediate=True
 			)
 			self.x0_fn.clear_buffer()
 			return x_0_hat, intermidates
 		else:
-			x_0_hat = dpm_solver.sample(
+			x_0_hat = solver.sample(
 				x_T,
-				**self.dpm_argv,
+				**self.sampling_argv,
 				return_intermediate=False
 			)
 			self.x0_fn.clear_buffer()
@@ -363,23 +414,23 @@ class Diffuser(BaseNetwork):
 			classifier_t_threshold=classifier_t_threshold,
 			classifier_grad_place_holder=place_holder
 		)
-		dpm_solver = DPM_Solver(
+		solver = DPM_Solver(
 			model_fn_continuous,
 			noise_schedule,
 			algorithm_type="dpmsolver++"
 		)
 		if return_intermediate:
-			x_0_hat, intermidates = dpm_solver.sample(
+			x_0_hat, intermidates = solver.sample(
 				x_T,
-				**self.dpm_argv,
+				**self.sampling_argv,
 				return_intermediate=True
 			)
 			self.x0_fn.clear_buffer()
 			return x_0_hat, intermidates
 		else:
-			x_0_hat = dpm_solver.sample(
+			x_0_hat = solver.sample(
 				x_T,
-				**self.dpm_argv,
+				**self.sampling_argv,
 				return_intermediate=False
 			)
 			self.x0_fn.clear_buffer()
@@ -421,18 +472,23 @@ class SE3Diffuser:
 	def set_loss(self, loss_fn):
 		self.loss_fn = loss_fn
 
+	@timer.timer_func
 	def sampling(self, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict], return_intermediate:bool=False):
 		img, pcd, Tcl, camera_info = x_cond
 		B = img.shape[0]
 		H_t = torch.eye(4).unsqueeze(0).expand(B, -1, -1).to(Tcl)
 		H_t_list = [H_t.clone()]
-		for t in range(self.val_scheduler_argv['n_diff_steps'], 0, -1):  # [T, T-1, ..., 1]
+		self.model.restore_buffer(img, pcd)
+		for t in range(self.val_scheduler_argv['n_diff_steps']+1, 1, -1):  # [T, T-1, ..., 1]
 			pred_x = self.model(img, pcd, H_t @ Tcl, camera_info)
-			delta_H_t = se3.exp(pred_x)  # (B, 4, 4)
-			H_0 = delta_H_t @ H_t  # accumulate transformations
+			if not isinstance(pred_x, torch.Tensor):
+				delta_H_t = pred_x[-1]
+			else:
+				delta_H_t = se3.exp(pred_x)  # (B, 4, 4) H_t_to_0
+			H_0 = delta_H_t @ H_t
 			gamma0 = self.val_scheduler.gamma0[t]
 			gamma1 = self.val_scheduler.gamma1[t]
-			H_t = se3.exp(gamma0 * se3.log(H_0) + gamma1 * se3.log(H_t))
+			H_t = se3.exp(gamma0 * se3.log(delta_H_t) + gamma1 * se3.log(H_t))
 			### noise
 			if self.val_scheduler_argv['add_noise'] and t > 1:
 				alpha_bar = self.val_scheduler.alpha_bars[t]
@@ -443,7 +499,8 @@ class SE3Diffuser:
 				noise = torch.sqrt(cc) * scale * torch.randn(B, 6).to(Tcl)  # [B, 6]
 				H_noise = se3.exp(noise)
 				H_t = H_noise @ H_t  # [B, 4, 4]
-			H_t_list.append(H_t.clone())
+			H_t_list.append(H_0.clone())
+		self.model.clear_buffer()
 		if return_intermediate:
 			return H_t_list
 		else:
@@ -467,8 +524,19 @@ class SE3Diffuser:
 		else:
 			H_t_noise = H_t
 		pred_x = self.model(img, pcd,  H_t_noise @ Tcl, camera_info)
-		pred_se3 = se3.exp(pred_x) @ H_t_noise
-		R_loss, t_loss = geodesic_loss(pred_se3, H_0)
+		if not self.seq_loss:
+			pred_se3 = se3.exp(pred_x) @ H_t_noise
+			R_loss, t_loss = geodesic_loss(pred_se3, H_0)
+		else:
+			pred_se3 = [se3.exp(x) @ H_t_noise for x in pred_x]
+			R_loss = 0
+			t_loss = 0
+			gamma = 1
+			for pred in pred_se3:
+				R_loss_i, t_loss_i = geodesic_loss(pred, H_0)
+				R_loss += R_loss_i * gamma
+				t_loss += t_loss_i * gamma
+				gamma *= 0.8
 		return R_loss, t_loss
 
 class GuidanceSampler:

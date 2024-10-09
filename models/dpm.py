@@ -7,7 +7,7 @@ from typing import Literal, Optional
 class NoiseScheduleVP:
     def __init__(
             self,
-            schedule='discrete',
+            schedule:Literal['discrete','linear']='discrete',
             betas=None,
             alphas_cumprod=None,
             continuous_beta_0=0.1,
@@ -1049,8 +1049,8 @@ class DPM_Solver:
         else:
             return xt
 
-    def inverse(self, x, steps=20, t_start=None, t_end=None, order=2, skip_type='time_uniform',
-        method='multistep', lower_order_final=True, denoise_to_zero=False, solver_type='dpmsolver',
+    def inverse(self, x, steps=20, t_start=None, t_end=None, order=2, skip_type:Literal['logSNR','time_uniform','time_quadratic']='time_uniform',
+        method:Literal['multistep', 'singlestep', 'singlestep_fixed']='multistep', lower_order_final=True, denoise_to_zero=False, solver_type='dpmsolver',
         atol=0.0078, rtol=0.05, return_intermediate=False,
     ):
         """
@@ -1064,8 +1064,8 @@ class DPM_Solver:
             method=method, lower_order_final=lower_order_final, denoise_to_zero=denoise_to_zero, solver_type=solver_type,
             atol=atol, rtol=rtol, return_intermediate=return_intermediate)
 
-    def sample(self, x, steps=20, t_start=None, t_end=None, order=2, skip_type='time_uniform',
-        method='multistep', lower_order_final=True, denoise_to_zero=False, solver_type='dpmsolver',
+    def sample(self, x, steps=20, t_start=None, t_end=None, order=2, skip_type:Literal['logSNR','time_uniform','time_quadratic']='time_uniform',
+        method:Literal['multistep', 'singlestep', 'singlestep_fixed']='multistep', lower_order_final=True, denoise_to_zero=False, solver_type:Literal['dpmsolver','taylor']='dpmsolver',
         atol=0.0078, rtol=0.05, return_intermediate=False,
     ):
         """

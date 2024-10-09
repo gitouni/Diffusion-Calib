@@ -4,7 +4,7 @@ from typing import Dict, List
 class DiffusionScheduler(torch.nn.Module):
     def __init__(self, argv:Dict):
         super().__init__()
-        self.num_steps = argv['n_diff_steps']
+        self.num_steps = argv['n_diff_steps'] + 1
         self.mode = argv['schedule_type']
 
         if self.mode == 'linear':

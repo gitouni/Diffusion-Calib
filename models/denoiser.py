@@ -10,12 +10,14 @@ from .rggnet.rggnet import RGGNet as VanillaRGGNet
 from .lccnet.LCCNet import LCCNet as VanillaLCCNet
 from .lccraft.convgru import LCCRAFT as VanillaLCCRAFT
 from .tools.core import DepthImgGenerator, BasicBlock
+from .tools.utils import timer
 from functools import partial
 
 class Surrogate(nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
+    @timer.timer_func
     @abstractmethod
     def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
         pass
