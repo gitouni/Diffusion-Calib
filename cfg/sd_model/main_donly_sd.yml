@@ -3,12 +3,12 @@ seed: 0
 device: cuda:0
 path:
   name: main_donly
-  base_dir: experiments/resize/
+  base_dir: experiments/large/
   log: log
   results: results
   checkpoint: checkpoint
   resume: null
-  pretrain: &pretrained_model experiments/resize/main_donly/checkpoint/best_model.pth
+  pretrain: &pretrained_model experiments/large/main_donly/checkpoint/best_model.pth
   
 model:
   surrogate:
@@ -19,12 +19,11 @@ model:
       encoder_argv:
         resnet_depth: 18
         resnet_pretrained: true
-        encoder_2d_chans: [256]
         max_depth: 50.0
         proj_planes: 32
         union_feat_size: [8, 16]
       aggregation_argv:
-        planes: 96
+        planes: 128
         final_feat: [2, 4]
         mlp_dims: [256, 128]
       proj_features: false

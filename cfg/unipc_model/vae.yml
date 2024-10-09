@@ -2,12 +2,12 @@ seed: 0
 device: cuda:0
 path:
   name: vae
-  base_dir: experiments/debug/
+  base_dir: experiments/large/
   log: log
   results: results
   checkpoint: checkpoint
   resume: null
-  pretrain: &pretrained_model experiments/resize/vae/checkpoint/best_model.pth
+  pretrain: &pretrained_model experiments/large/vae/checkpoint/best_model.pth
 
 vae:
   argv:

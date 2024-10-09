@@ -1,41 +1,45 @@
-# ProjFusion without projection feature F_P
 seed: 0
 device: cuda:0
 path:
-  name: main_donly
-  base_dir: experiments/debug/
+  name: rggnet
+  base_dir: experiments/large/
   log: log
   results: results
   checkpoint: checkpoint
   resume: null
-  pretrain: &pretrained_model experiments/resize/main_donly/checkpoint/best_model.pth
+  pretrain: &pretrained_model experiments/large/rggnet/checkpoint/best_model.pth
   
 model:
   surrogate:
-    type: ProjFusionNet  # Chosen from ['ProjFusionNet','LCCNet','CalibNet'], argv should match relative class as well
+    type: RGGNet
     argv:
-      activation: leakyrelu
-      inplace: true
-      encoder_argv:
+      rggnet_argv:
+        vae_path: experiments/resize/vae/checkpoint/best_model.pth
+        vae_argv:
+          img_size: [256, 512]
+          in_chan: 4
+          latent_dim: 100
+          hidden_dims: [64, 128, 64, 32]
+          activation: leakyrelu
+          inplace: true
         resnet_depth: 18
         resnet_pretrained: true
-        encoder_2d_chans: [256]
+        mlp_head_dims: [512, 128]
+        mlp_sub_dims: [128]
+        activation: relu
+        inplace: true
+      pcd2depth_argv:
+        pooling_size: 1
         max_depth: 50.0
-        proj_planes: 32
-        union_feat_size: [8, 16]
-      aggregation_argv:
-        planes: 96
-        final_feat: [2, 4]
-        mlp_dims: [256, 128]
-      proj_features: false
-      depth_features: true
-
+      kld_weight: 1.0E-6
+      ELBO_weight: 1.0E-2
   diffuser:
     beta_schedule:
       schedule: cosine
       n_timestep: 1000
       linear_start: 1.0E-4
       linear_end: 0.02
+    sampling_type: unipc
     sampling_argv:
       steps: 10
       order: 3
@@ -43,9 +47,7 @@ model:
       method: multistep
       lower_order_final: false
       denoise_to_zero: false
-      solver_type: dpmsolver
-      atol: 0.005
-      rtol: 0.05
+
 loss:
   type: mae
   args:

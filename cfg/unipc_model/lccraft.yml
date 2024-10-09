@@ -34,23 +34,20 @@ model:
         feat_poooling_size: [2,4]
         fps_num: 1024
       num_iters: 5
-  diffusion_scheduler:
-    train:
-      schedule_type: cosine
-      n_diff_steps: 200
-      beta_1: 1.0E-4
-      beta_T: 0.05
-      sigma_r: 0.05
-      sigma_t: 0.03
-      add_noise: true
-    val:
-      schedule_type: cosine
-      n_diff_steps: 10
-      beta_1: 0.2
-      beta_T: 0.8
-      sigma_r: 0.1
-      sigma_t: 0.01
-      add_noise: true
+  diffuser:
+    beta_schedule:
+      schedule: cosine
+      n_timestep: 1000
+      linear_start: 1.0E-4
+      linear_end: 0.02
+    sampling_type: unipc
+    sampling_argv:
+      steps: 10
+      order: 3
+      skip_type: logSNR
+      method: multistep
+      lower_order_final: false
+      denoise_to_zero: false
 
 loss:
   type: mae

@@ -1,14 +1,14 @@
-# ProjFusion without projection feature F_P
+# ProjFusion without depth feature F_D
 seed: 0
 device: cuda:0
 path:
-  name: main_donly
-  base_dir: experiments/debug/
+  name: main_ponly
+  base_dir: experiments/large/
   log: log
   results: results
   checkpoint: checkpoint
   resume: null
-  pretrain: &pretrained_model experiments/resize/main_donly/checkpoint/best_model.pth
+  pretrain: &pretrained_model experiments/large/main_ponly/checkpoint/best_model.pth
   
 model:
   surrogate:
@@ -19,16 +19,17 @@ model:
       encoder_argv:
         resnet_depth: 18
         resnet_pretrained: true
-        encoder_2d_chans: [256]
-        max_depth: 50.0
-        proj_planes: 32
+        encoder_3d_chans: [32, 64, 128, 256]
+        pcd_pyramid: [4096, 2048, 1024, 512]
+        encoder_3d_knn: 16
+        fusion_knn: 4
         union_feat_size: [8, 16]
       aggregation_argv:
-        planes: 96
+        planes: 128
         final_feat: [2, 4]
         mlp_dims: [256, 128]
-      proj_features: false
-      depth_features: true
+      proj_features: true
+      depth_features: false
 
   diffuser:
     beta_schedule:
@@ -36,6 +37,7 @@ model:
       n_timestep: 1000
       linear_start: 1.0E-4
       linear_end: 0.02
+    sampling_type: unipc
     sampling_argv:
       steps: 10
       order: 3
@@ -43,9 +45,6 @@ model:
       method: multistep
       lower_order_final: false
       denoise_to_zero: false
-      solver_type: dpmsolver
-      atol: 0.005
-      rtol: 0.05
 loss:
   type: mae
   args:

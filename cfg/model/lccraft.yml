@@ -2,7 +2,7 @@ seed: 0
 device: cuda:0
 path:
   name: lccraft
-  base_dir: experiments/resize/
+  base_dir: experiments/debug/
   log: log
   results: results
   checkpoint: checkpoint
@@ -40,7 +40,7 @@ model:
       n_timestep: 1000
       linear_start: 1.0E-4
       linear_end: 0.02
-    dpm_argv:
+    sampling_argv:
       steps: 10
       order: 3
       skip_type: logSNR
