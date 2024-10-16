@@ -3,12 +3,12 @@ seed: 0
 device: cuda:0
 path:
   name: main_ponly
-  base_dir: experiments/debug/
+  base_dir: experiments/regular/
   log: log
   results: results
   checkpoint: checkpoint
   resume: null
-  pretrain: &pretrained_model experiments/resize/main_ponly/checkpoint/best_model.pth
+  pretrain: &pretrained_model experiments/regular/main_ponly/checkpoint/best_model.pth
   
 model:
   surrogate:
@@ -19,7 +19,6 @@ model:
       encoder_argv:
         resnet_depth: 18
         resnet_pretrained: true
-        encoder_2d_chans: [256]
         encoder_3d_chans: [32, 64, 128, 256]
         pcd_pyramid: [4096, 2048, 1024, 512]
         encoder_3d_knn: 16
@@ -28,7 +27,7 @@ model:
       aggregation_argv:
         planes: 96
         final_feat: [2, 4]
-        mlp_dims: [256, 128]
+        mlp_dims: [128]
       proj_features: true
       depth_features: false
 
@@ -38,6 +37,7 @@ model:
       n_timestep: 1000
       linear_start: 1.0E-4
       linear_end: 0.02
+    sampling_type: dpm
     sampling_argv:
       steps: 10
       order: 3

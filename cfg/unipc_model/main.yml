@@ -28,7 +28,8 @@ model:
       aggregation_argv:
         planes: 128
         final_feat: [2, 4]
-        mlp_dims: [256, 128]
+        rot_mlp_dims: [512, 256]
+        tsl_mlp_dims: [512, 256]
       proj_features: true
       depth_features: true
 

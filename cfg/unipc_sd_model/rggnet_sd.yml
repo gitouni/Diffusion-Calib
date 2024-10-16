@@ -1,30 +1,38 @@
 seed: 0
 device: cuda:0
 path:
-  name: lccnet
-  base_dir: experiments/regular/
+  name: rggnet
+  base_dir: experiments/large/
   log: log
   results: results
   checkpoint: checkpoint
   resume: null
-  pretrain: &pretrained_model experiments/regular/lccnet/checkpoint/best_model.pth
+  pretrain: &pretrained_model experiments/large/rggnet/checkpoint/best_model.pth
   
 model:
   surrogate:
-    type: LCCNet
+    type: RGGNet
     argv:
-      lccnet_argv:
-        image_size: [256, 512]
-        use_feat_from: 1
-        md: 4
-        use_reflectance: false
-        dropout: 0.0
-        Action_Func: leakyrelu
-        attention: false
-        res_num: 18
+      rggnet_argv:
+        vae_path: experiments/large/vae/checkpoint/best_model.pth
+        vae_argv:
+          img_size: [256, 512]
+          in_chan: 4
+          latent_dim: 100
+          hidden_dims: [64, 128, 64, 32]
+          activation: leakyrelu
+          inplace: true
+        resnet_depth: 18
+        resnet_pretrained: true
+        mlp_head_dims: [512, 128]
+        mlp_sub_dims: [128]
+        activation: relu
+        inplace: true
       pcd2depth_argv:
         pooling_size: 1
         max_depth: 50.0
+      kld_weight: 1.0E-6
+      ELBO_weight: 1.0E-2
   diffusion_scheduler:
     train:
       schedule_type: cosine

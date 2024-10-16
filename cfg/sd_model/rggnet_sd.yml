@@ -2,19 +2,19 @@ seed: 0
 device: cuda:0
 path:
   name: rggnet
-  base_dir: experiments/large/
+  base_dir: experiments/regular/
   log: log
   results: results
   checkpoint: checkpoint
   resume: null
-  pretrain: &pretrained_model experiments/large/rggnet/checkpoint/best_model.pth
+  pretrain: &pretrained_model experiments/regular/rggnet/checkpoint/best_model.pth
   
 model:
   surrogate:
     type: RGGNet
     argv:
       rggnet_argv:
-        vae_path: experiments/large/vae/checkpoint/best_model.pth
+        vae_path: experiments/regular/vae/checkpoint/best_model.pth
         vae_argv:
           img_size: [256, 512]
           in_chan: 4

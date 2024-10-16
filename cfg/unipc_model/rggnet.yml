@@ -14,7 +14,7 @@ model:
     type: RGGNet
     argv:
       rggnet_argv:
-        vae_path: experiments/resize/vae/checkpoint/best_model.pth
+        vae_path: experiments/large/vae/checkpoint/best_model.pth
         vae_argv:
           img_size: [256, 512]
           in_chan: 4

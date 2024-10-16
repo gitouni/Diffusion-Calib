@@ -2,12 +2,12 @@ seed: 0
 device: cuda:0
 path:
   name: lccraft
-  base_dir: experiments/debug/
+  base_dir: experiments/regular/
   log: log
   results: results
   checkpoint: checkpoint
   resume: null
-  pretrain: &pretrained_model experiments/resize/lccraft/checkpoint/best_model.pth
+  pretrain: &pretrained_model experiments/regular/lccraft/checkpoint/best_model.pth
 
 model:
   surrogate:
@@ -40,6 +40,7 @@ model:
       n_timestep: 1000
       linear_start: 1.0E-4
       linear_end: 0.02
+    sampling_type: dpm
     sampling_argv:
       steps: 10
       order: 3

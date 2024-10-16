@@ -2,12 +2,12 @@ seed: 0
 device: cuda:0
 path:
   name: calibnet
-  base_dir: experiments/regular/
+  base_dir: experiments/large/
   log: log
   results: results
   checkpoint: checkpoint
   resume: null
-  pretrain: &pretrained_model experiments/regular/calibnet/checkpoint/best_model.pth
+  pretrain: &pretrained_model experiments/large/calibnet/checkpoint/best_model.pth
   
 model:
   surrogate:
@@ -25,23 +25,23 @@ model:
       pcd2depth_argv:
         pooling_size: 3
         max_depth: 50.0
-  diffuser:
-    beta_schedule:
-      schedule: cosine
-      n_timestep: 1000
-      linear_start: 1.0E-4
-      linear_end: 0.02
-    sampling_type: dpm
-    sampling_argv:
-      steps: 10
-      order: 3
-      skip_type: logSNR
-      method: multistep
-      lower_order_final: false
-      denoise_to_zero: false
-      solver_type: dpmsolver
-      atol: 0.005
-      rtol: 0.05
+  diffusion_scheduler:
+    train:
+      schedule_type: cosine
+      n_diff_steps: 200
+      beta_1: 1.0E-4
+      beta_T: 0.05
+      sigma_r: 0.05
+      sigma_t: 0.03
+      add_noise: true
+    val:
+      schedule_type: cosine
+      n_diff_steps: 10
+      beta_1: 0.2
+      beta_T: 0.8
+      sigma_r: 0.1
+      sigma_t: 0.01
+      add_noise: true
 
 loss:
   type: mae
