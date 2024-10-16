@@ -13,10 +13,10 @@ def options():
     parser.add_argument("--image_dir",type=str,default="data/colmap/13/images_col/")
     parser.add_argument("--lidar_dir",type=str,default="data/kitti/sequences/13/velodyne")
     parser.add_argument("--gt_mat",type=str,default="data/colmap/13/gt.txt")
-    parser.add_argument("--x0_dir",type=str,default="experiments/resize/main/kitti/results/se3_diffusion_10/seq_13/")
-    parser.add_argument("--index",type=int,default=35)
+    parser.add_argument("--x0_dir",type=str,default="experiments/resize/main/kitti/results/diffusion_10/seq_13/")
+    parser.add_argument("--index",type=int,default=48)
     parser.add_argument("--intran",type=float,nargs=3, default=[7.188560000000e+02, 6.071928000000e+02, 1.852157000000e+02], help='f, cx, cy')
-    parser.add_argument("--res_dir",type=str,default="fig/sd")
+    parser.add_argument("--res_dir",type=str,default="fig/lsd")
     return parser.parse_args()
 
 def loadpcd(name:str):
