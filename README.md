@@ -10,6 +10,10 @@ Official Implementation of Iterative Camera-Lidar Calibration via Surrogate Diff
 cd models/tools/csrc/
 python setup.py install
 ```
+* Copy `.so` files into `models/tools/csrc/`
+```bash
+cp lib.linux-x86_64-cpython-38/* .
+```
 * Build correlation_cuda package for LCCNet
 ```bash
 cd models/lccnet/correlation_package/
