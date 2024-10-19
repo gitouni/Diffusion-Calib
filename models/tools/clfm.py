@@ -69,8 +69,8 @@ class FusionAwareInterp(nn.Module):
             Conv2dNormRelu(k, n_channels_3d, act='sigmoid'),
         )
 
-    def forward(self, uv, feat_2d, feat_3d):
-        bs, _, image_h, image_w = feat_2d.shape
+    def forward(self, uv, feat_2d_shape, feat_3d):
+        bs, _, image_h, image_w = feat_2d_shape
         n_channels_3d = feat_3d.shape[1]
 
         grid = mesh_grid(bs, image_h, image_w, uv.device)  # [B, 2, H, W]
