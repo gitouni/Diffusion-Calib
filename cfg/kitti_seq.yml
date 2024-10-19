@@ -44,8 +44,13 @@ dataset:
       args:
         batch_sampler: &batch_sampler_args
           dataset_len: 128
+<<<<<<< HEAD
           max_images: 10
           num_samples_per_seq: [2,5]
+=======
+          max_images: 8
+          num_samples_per_seq: [2,4]
+>>>>>>> 3d314cb1fa52e90520c82e6d63fbf4fc809bef47
           continuous: true
         <<: *dataloader_common_args
       val_args:
@@ -98,7 +103,11 @@ model:
       pcd_pyramid: [2048, 1024, 512]
     atten_argv:
       nhead: 6
+<<<<<<< HEAD
       num_encoder_layers: 2
+=======
+      num_encoder_layers: 4
+>>>>>>> 3d314cb1fa52e90520c82e6d63fbf4fc809bef47
       dim_feedforward: 512
       dropout: 0.1
       activation: relu
@@ -110,7 +119,11 @@ model:
       n_timestep: 1000
       linear_start: 1.0E-4
       linear_end: 0.02
+<<<<<<< HEAD
     sampling_argv:
+=======
+    dpm_argv:
+>>>>>>> 3d314cb1fa52e90520c82e6d63fbf4fc809bef47
       steps: 10
       order: 3
       skip_type: logSNR
@@ -128,7 +141,11 @@ loss:
 
 optimizer:
   args:
+<<<<<<< HEAD
     lr: 5.0E-4
+=======
+    lr: 5.0E-5
+>>>>>>> 3d314cb1fa52e90520c82e6d63fbf4fc809bef47
     betas: [0.9, 0.999]
   max_grad: 1.0
 
