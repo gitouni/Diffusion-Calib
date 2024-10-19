@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from .utils import grid_sample_wrapper, mesh_grid, k_nearest_neighbor, batch_indexing, softmax, timer
 from .mlp import Conv1dNormRelu, Conv2dNormRelu
-from typing import Literal
+from typing import Literal, Tuple
 
 class CLFM(nn.Module):
     def __init__(self, in_channels_2d, in_channels_3d, fusion_fn:Literal['add','concat','gated','sk']='sk', norm=None, fusion_knn:int=1):
@@ -26,7 +26,6 @@ class CLFM(nn.Module):
         else:
             raise ValueError
 
-    @timer.timer_func
     def forward(self, uv, feat_2d:torch.Tensor, feat_3d:torch.Tensor):
         feat_3d_interp = self.interp(uv, feat_2d.detach(), feat_3d.detach())
         out2d = self.fuse2d(feat_2d, feat_3d_interp)
@@ -51,7 +50,6 @@ class CLFM_2D(nn.Module):
         else:
             raise ValueError
 
-    @timer.timer_func
     def forward(self, uv:torch.Tensor, feat_2d:torch.Tensor, feat_3d:torch.Tensor):
         # feat_2d = feat_2d.float()
         # feat_3d = feat_3d.float()
@@ -60,7 +58,7 @@ class CLFM_2D(nn.Module):
         return out2d  # (N,C,H,W)
 
 class FusionAwareInterp(nn.Module):
-    def __init__(self, n_channels_3d, k=1, norm=None):
+    def __init__(self, n_channels_3d:int, k:int=1, norm=None):
         super().__init__()
         self.k = k
         self.out_conv = Conv2dNormRelu(n_channels_3d, n_channels_3d, norm=norm)
@@ -69,7 +67,7 @@ class FusionAwareInterp(nn.Module):
             Conv2dNormRelu(k, n_channels_3d, act='sigmoid'),
         )
 
-    def forward(self, uv, feat_2d_shape, feat_3d):
+    def forward(self, uv:torch.Tensor, feat_2d_shape:Tuple[int,int,int,int], feat_3d:torch.Tensor):
         bs, _, image_h, image_w = feat_2d_shape
         n_channels_3d = feat_3d.shape[1]
 
