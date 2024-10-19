@@ -19,7 +19,11 @@ cp lib.linux-x86_64-cpython-38/* .
 cd models/lccnet/correlation_package/
 python setup.py install
 ```
-The `correlation_cuda` package may be incompatible with CUDA >= 12.0. The failure of building this package only affects implementation of our baseline, LCCNet.
+<details>
+  <summary>Troubleshooting</summary>
+  The `correlation_cuda` package may be incompatible with CUDA >= 12.0. The failure of building this package only affects implementation of our baseline, LCCNet. If your CUDA version >= 12.0 and want to implement LCCNET. It would be easy to use correlation pacakge in csrc to re-implement it. To try our best to reproduce LCCNet's performance, we utilize their own correlation package.
+</details>
+
 # Link KITTI Dataset to the root
 * download KITTI dataset from [https://www.cvlibs.net/datasets/kitti/eval_odometry.php](https://www.cvlibs.net/datasets/kitti/eval_odometry.php). (RGB, Veloydne and Calib data are all required)
 * link the `dataset` filefolder as follows:
