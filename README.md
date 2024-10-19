@@ -31,3 +31,5 @@ cd ..
 ```
 # Train
 * You can download our [pretrained models](https://github.com/gitouni/SurrogateCalib/releases/download/0.0/large_ckpt.zip) trained on KITTI Odometry Dataset or train them following the instructions.
+# Acknowledgements
+Thanks authors of [CamLiFLow](https://github.com/MCG-NJU/CamLiFlow), [DPM-Solver](https://github.com/LuChengTHU/dpm-solver), [UniPC](https://github.com/wl-zhao/UniPC) and [Palette](https://github.com/Janspiry/Palette-Image-to-Image-Diffusion-Models)
