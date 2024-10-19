@@ -29,3 +29,5 @@ cd data
 ln -s /path/to/kitti/ kitti
 cd ..
 ```
+# Train
+* You can download our [pretrained models](https://github.com/gitouni/SurrogateCalib/releases/download/0.0/large_ckpt.zip) trained on KITTI Odometry Dataset or train them following the instructions.
