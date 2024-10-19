@@ -100,8 +100,15 @@ def log(g:torch.Tensor):
     return x.view(*(g.size()[0:-2]), 6)
 
 def transform(g: torch.Tensor, a: torch.Tensor):
-    # g : SE(3),  * x 4 x 4
-    # a : R^3,    * x 3[x N]
+    """transform
+
+    Args:
+        g (torch.Tensor): transformation (*, 4, 4)
+        a (torch.Tensor): point cloud (*, 3, N)
+
+    Returns:
+        torch.Tensor: transformed point cloud(*, 3, N)
+    """
     return g[...,:3,:3] @ a + g[...,:3,[3]]
 
 def rot_transform(g: torch.Tensor,a: torch.Tensor):

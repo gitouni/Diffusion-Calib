@@ -66,6 +66,9 @@ def toMat(rvec:np.ndarray, tvec:np.ndarray):
     mat[:3,3] = V @ tvec
     return mat
 
+def toMatw(vec:np.ndarray):
+    return toMat(vec[...,:3], vec[...,3:6])
+
 def inv_pose(pose:np.ndarray):
     """inverse a SE(3) matrix
 
