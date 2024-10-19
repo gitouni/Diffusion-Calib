@@ -1,0 +1,5 @@
+# ninja log v5
+0	13284	1724246996576205034	/home/ouni/CODE/Research/denoising_calib/models/lccnet/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda.o	7cf2dd1ea910e115
+0	24485	1724247007780082094	/home/ouni/CODE/Research/denoising_calib/models/lccnet/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda_kernel.o	ffa16e9f5a0f7f1f
+10	8665	1724247638917682073	/home/ouni/CODE/Research/denoising_calib/models/lccnet/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda_kernel.o	5b3f4b80d1567469
+10	13170	1724247643417638883	/home/ouni/CODE/Research/denoising_calib/models/lccnet/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda.o	4478e8842ec3494b

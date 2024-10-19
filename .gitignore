@@ -1,0 +1,7 @@
+*.log
+*.pt
+*.pth
+/log/
+/build/
+/__pycache__/
+
