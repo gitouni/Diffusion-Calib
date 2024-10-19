@@ -21,7 +21,7 @@ python setup.py install
 ```
 <details>
   <summary>Troubleshooting</summary>
-  The `correlation_cuda` package may be incompatible with CUDA >= 12.0. The failure of building this package only affects implementation of our baseline, LCCNet. If your CUDA version >= 12.0 and want to implement LCCNET. It would be easy to use correlation pacakge in csrc to re-implement it. To try our best to reproduce LCCNet's performance, we utilize their own correlation package.
+  The `correlation_cuda` package may be incompatible with CUDA >= 12.0. The failure of building this package only affects implementation of our baseline, LCCNet. If your CUDA version >= 12.0 and you still want to implement LCCNET. It would be easy to use correlation pacakge in csrc to re-implement it. To try our best to reproduce LCCNet's performance, we utilize their own correlation package.
 </details>
 
 # Link KITTI Dataset to the root
