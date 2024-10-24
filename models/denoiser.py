@@ -206,6 +206,10 @@ class ResAggregation(nn.Module):
             if isinstance(m, nn.Linear):
                 nn.init.xavier_normal_(m.weight,0.1)
                 nn.init.xavier_normal_(m.weight,0.1)
+        for m in self.tsl_fc.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight,0.1)
+                nn.init.xavier_normal_(m.weight,0.1)
 
     def forward(self,x:torch.Tensor):
         x = self.head_conv(x)
