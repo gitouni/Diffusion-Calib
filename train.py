@@ -56,7 +56,7 @@ def val_epoch(val_loader:DataLoader, diffuser:Diffuser, logger:logging.Logger, d
             gt_se3 = batch['gt'].to(device)  # transform uncalibrated_pcd to calibrated_pcd
             gt_x = se3.log(gt_se3)
             camera_info = batch['camera_info']
-            x0_hat = diffuser.dpm_sampling(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info))
+            x0_hat = diffuser.sample_fn(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info))
             x0_se3 = se3.exp(x0_hat)
             R_loss, t_loss = geodesic_loss(x0_se3, gt_se3)
             if diffuser.seq_loss:
