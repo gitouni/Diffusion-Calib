@@ -95,7 +95,7 @@ class DepthImgGenerator:
 
 class BasicBlock(nn.Module):
     def __init__(self, inplanes, planes, stride=1, padding=1,
-                 dilation=1, activation_fnc=nn.ReLU()):
+                 dilation=1, activation_fnc=nn.ReLU(), has_downsample:bool=True):
         super(BasicBlock, self).__init__()
         self.conv1 = nn.Conv2d(inplanes, planes, 3, stride=stride,
                              padding=padding, dilation=dilation,bias=False)
@@ -103,9 +103,12 @@ class BasicBlock(nn.Module):
         self.activate_func = activation_fnc
         self.conv2 = nn.Conv2d(planes, planes, 3, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(planes)
-        self.downsample = nn.Sequential(
-            nn.Conv2d(inplanes, planes, kernel_size=1, stride=stride, bias=False),
-            nn.BatchNorm2d(planes))
+        if has_downsample:
+            self.downsample = nn.Sequential(
+                nn.Conv2d(inplanes, planes, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes))
+        else:
+            self.downsample = nn.Identity()
         self.stride = stride
 
     def forward(self, x):
@@ -260,8 +263,7 @@ class FusionNet(nn.Module):
                 proj_planes:int = 32,
                 max_depth:float = 50.0,
                 encoder_3d_knn:int = 16,
-                union_feat_size:Tuple[int,int] = [8,16],
-                fusion_knn:int=3
+                fusion_knn:int=4
                 ):
         assert len(encoder_3d_chans) == len(pcd_pyramid) 
         super().__init__()
@@ -269,7 +271,6 @@ class FusionNet(nn.Module):
         self.fnet_3d = Encoder3D(encoder_3d_chans, pcd_pyramid, norm='batch_norm', k=encoder_3d_knn)
         self.depth_gen = DepthImgGenerator(pooling_size=1, max_depth=max_depth)
         self.fnet_proj = custom_resnet(inplanes=1, planes=proj_planes)
-        self.interp_func = partial(F.interpolate, size=union_feat_size, mode='bilinear',align_corners=True)
         self.fusion = FusionAwareInterp(self.fnet_3d.n_chans[-1], k = fusion_knn, norm='batch_norm')
         planes = self.fnet_2d.out_chans[-1] + encoder_3d_chans[-1] + self.fnet_proj.out_chans[-1]
         self.out_dim = planes
@@ -328,8 +329,7 @@ class FusionNet(nn.Module):
         uv = project_pc2image(xyz_tf, feat_camera_info)  # (B, 2, N)
         interp_2d = self.fusion(uv, feat_2d.shape, feat_3d.detach())  # (B, C, H, W)
         fused_2d = torch.cat([feat_2d, interp_2d, feat_proj], dim=1)
-        final_feat = self.interp_func(fused_2d)  # (B, C, h, w)
-        return final_feat  # (B, C, h, w)
+        return fused_2d  # (B, C, h, w)
     
     # def logit_forward(self, image:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict) -> torch.Tensor:
     #     """fusion net probability embedding
@@ -368,13 +368,11 @@ class FusionNetDepthOnly(nn.Module):
                 resnet_pretrained:bool,
                 proj_planes:int = 32,
                 max_depth:float = 50.,
-                union_feat_size:Tuple[int,int] = [8,16],
                 ):
         super().__init__()
         self.fnet_2d = Encoder2D(resnet_depth, pretrained=resnet_pretrained)
         self.depth_gen = DepthImgGenerator(pooling_size=1, max_depth=max_depth)
         self.fnet_proj = custom_resnet(inplanes=1, planes=proj_planes)
-        self.interp_func = partial(F.interpolate, size=union_feat_size, mode='bilinear',align_corners=True)
         planes = self.fnet_2d.out_chans[-1] + self.fnet_proj.out_chans[-1]
         self.out_dim = planes
         self.feat_buffer = dict()
@@ -412,8 +410,7 @@ class FusionNetDepthOnly(nn.Module):
         feat_projs = self.fnet_proj(depth_img)
         feat_2d, feat_proj = feat_2ds[-1], feat_projs[-1]
         fused_2d = torch.cat([feat_2d, feat_proj], dim=1)
-        final_feat = self.interp_func(fused_2d)  # (B, C, h, w)
-        return final_feat  # (B, C*h*w)
+        return fused_2d  # (B, C*h*w)
 
 
 class FusionNetProjectOnly(nn.Module):
@@ -422,14 +419,12 @@ class FusionNetProjectOnly(nn.Module):
                 encoder_3d_chans:List[int]=[64, 128, 256, 512],
                 pcd_pyramid:List[int]=[4096, 2048, 1024, 512],
                 encoder_3d_knn:int = 16,
-                union_feat_size:Tuple[int,int] = [8,16],
-                fusion_knn:int=3
+                fusion_knn:int=4
                 ):
         assert len(encoder_3d_chans) == len(pcd_pyramid) 
         super().__init__()
         self.fnet_2d = Encoder2D(resnet_depth, pretrained=resnet_pretrained)
         self.fnet_3d = Encoder3D(encoder_3d_chans, pcd_pyramid, norm='batch_norm', k=encoder_3d_knn)
-        self.interp_func = partial(F.interpolate, size=union_feat_size, mode='bilinear',align_corners=True)
         self.fusion = FusionAwareInterp(self.fnet_3d.n_chans[-1], k = fusion_knn, norm='batch_norm')
         planes = self.fnet_2d.out_chans[-1] + encoder_3d_chans[-1]
         self.out_dim = planes
@@ -488,5 +483,4 @@ class FusionNetProjectOnly(nn.Module):
         uv = project_pc2image(xyz_tf, feat_camera_info)  # (B, 2, N)
         interp_2d = self.fusion(uv, feat_2d.shape, feat_3d.detach())  # (B, C, H, W)
         fused_2d = torch.cat([feat_2d, interp_2d], dim=1)
-        final_feat = self.interp_func(fused_2d)  # (B, C, h, w)
-        return final_feat  # (B, C, h, w)
+        return fused_2d  # (B, C, h, w)
