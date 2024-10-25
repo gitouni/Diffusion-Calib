@@ -24,12 +24,11 @@ model:
         proj_planes: 32
         encoder_3d_knn: 16
         fusion_knn: 4
-        union_feat_size: [8, 16]
       aggregation_argv:
-        planes: 128
+        planes: 64
         final_feat: [2, 4]
-        rot_mlp_dims: [512, 256]
-        tsl_mlp_dims: [512, 256]
+        rot_mlp_dims: [256, 256]
+        tsl_mlp_dims: [256, 256]
       proj_features: true
       depth_features: true
 

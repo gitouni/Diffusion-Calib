@@ -252,7 +252,7 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
     else:
         raise FileNotFoundError("'pretrain' cannot be set to 'None' during test-time")
     summary(surrogate_model)  # print the volume of model parameters
-    exit(0)
+    # exit(0)
     # testing
     record_list = []
     for name, dataloader in zip(name_list, dataloader_list):
@@ -277,8 +277,8 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_config', default="cfg/dataset/kitti_large.yml", type=str)
-    parser.add_argument("--model_config",type=str,default="cfg/unipc_model/main_ponly.yml")
-    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='iterative')
+    parser.add_argument("--model_config",type=str,default="cfg/unipc_model/lccraft_small.yml")
+    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='diffusion')
     parser.add_argument("--iters",type=int,default=1)
     args = parser.parse_args()
     dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
