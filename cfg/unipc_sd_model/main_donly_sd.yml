@@ -21,12 +21,11 @@ model:
         resnet_pretrained: true
         max_depth: 50.0
         proj_planes: 32
-        union_feat_size: [8, 16]
       aggregation_argv:
-        planes: 128
+        planes: 64
         final_feat: [2, 4]
-        rot_mlp_dims: [512, 256]
-        tsl_mlp_dims: [512, 256]
+        rot_mlp_dims: [256, 256]
+        tsl_mlp_dims: [256, 256]
       proj_features: false
       depth_features: true
 
