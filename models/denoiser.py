@@ -135,7 +135,7 @@ class Aggregation(nn.Module):
                 if m.bias is not None:
                     m.bias.data.zero_()
         nn.init.xavier_normal_(self.fc1.weight,0.1)
-        nn.init.xavier_normal_(self.fc2.weight,0.1)
+        nn.init.xavier_normal_(self.fc2.weight,0.05)
 
     def forward(self,x:torch.Tensor):
         x = self.conv1(x)
@@ -158,14 +158,16 @@ class ResAggregation(nn.Module):
     def __init__(self,inplanes:int, planes=96, rot_mlp_dims:Optional[List[int]]=None, tsl_mlp_dims:Optional[List[int]]=None, final_feat=(2,4), activation_fn:nn.Module=nn.ReLU(inplace=True)):
         super(ResAggregation,self).__init__()
         self.head_conv = nn.Sequential(
-            BasicBlock(inplanes, planes*4, activation_fnc=activation_fn),
-            BasicBlock(planes*4, planes*2, activation_fnc=activation_fn)
+            BasicBlock(inplanes, planes*8, activation_fnc=activation_fn),
+            BasicBlock(planes*8, planes*4, activation_fnc=activation_fn)   
         )
         self.rot_conv = nn.Sequential(
+            BasicBlock(planes*4, planes*2, activation_fnc=activation_fn),
             BasicBlock(planes*2, planes, activation_fnc=activation_fn),
             nn.AdaptiveAvgPool2d(output_size=final_feat)
         )
         self.tsl_conv = nn.Sequential(
+            BasicBlock(planes*4, planes*2, activation_fnc=activation_fn),
             BasicBlock(planes*2, planes, activation_fnc=activation_fn),
             nn.AdaptiveAvgPool2d(output_size=final_feat)
         )
@@ -205,12 +207,10 @@ class ResAggregation(nn.Module):
         for m in self.rot_fc.modules():
             if isinstance(m, nn.Linear):
                 nn.init.xavier_normal_(m.weight,0.1)
-                nn.init.xavier_normal_(m.weight,0.1)
         for m in self.tsl_fc.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight,0.1)
-                nn.init.xavier_normal_(m.weight,0.1)
-                
+                nn.init.xavier_normal_(m.weight,0.05)
+
     def forward(self,x:torch.Tensor):
         x = self.head_conv(x)
         x_rot = self.rot_conv(x)
