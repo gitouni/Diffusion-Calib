@@ -2,6 +2,7 @@
 *.pt
 *.pth
 *.pyc
+*.txt
 log/
 fig/
 RANSAC/
@@ -19,10 +20,11 @@ models/lccnet/correlation_package/__pycache__/
 models/lccnet/correlation_package/build/
 models/lccnet/correlation_package/dist/
 models/lccnet/correlation_package/correlation_cuda.egg-info/
-experiments/debug
-experiments/large_ckpt
-experiments/regular
-experiments/surrogate
+experiments
+# experiments/debug
+# experiments/large_ckpt
+# experiments/regular
+# experiments/surrogate
 */build/
 */__pycache__/
 metrics_cmp.py

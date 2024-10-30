@@ -328,7 +328,7 @@ class FusionNet(nn.Module):
         })
         uv = project_pc2image(xyz_tf, feat_camera_info)  # (B, 2, N)
         interp_2d = self.fusion(uv, feat_2d.shape, feat_3d.detach())  # (B, C, H, W)
-        fused_2d = torch.cat([feat_2d, interp_2d, feat_proj], dim=1)
+        fused_2d = torch.cat([feat_2d, interp_2d, feat_proj], dim=1)  # 512 + 256 + 256
         return fused_2d  # (B, C, h, w)
     
     # def logit_forward(self, image:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict) -> torch.Tensor:

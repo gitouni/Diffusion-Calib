@@ -1,0 +1,65 @@
+seed: 0
+device: cuda:0
+path:
+  name: lccnet
+  base_dir: experiments/multirange/
+  log: log
+  results: results
+  checkpoint: checkpoint
+  resume: null
+  pretrain: &pretrained_model
+    - experiments/multirange/lccnet/checkpoint/best_stage_0.pth
+    - experiments/multirange/lccnet/checkpoint/best_stage_1.pth
+    - experiments/multirange/lccnet/checkpoint/best_stage_2.pth
+  
+model:
+  surrogate:
+    type: LCCNet
+    argv:
+      lccnet_argv:
+        image_size: [256, 512]
+        use_feat_from: 1
+        md: 4
+        use_reflectance: false
+        dropout: 0.0
+        Action_Func: leakyrelu
+        attention: false
+        res_num: 18
+      pcd2depth_argv:
+        pooling_size: 1
+        max_depth: 50.0
+  diffuser:
+    beta_schedule:
+      schedule: cosine
+      n_timestep: 1000
+      linear_start: 1.0E-4
+      linear_end: 0.02
+    sampling_type: unipc
+    sampling_argv:
+      steps: 10
+      order: 3
+      skip_type: logSNR
+      method: multistep
+      lower_order_final: false
+      denoise_to_zero: false
+
+loss:
+  type: mae
+  args:
+    reduction: mean
+
+optimizer:
+  args:
+    lr: 1.0E-4
+    betas: [0.9, 0.999]
+  max_grad: 1.0
+
+scheduler:
+  type: poly
+  args:
+    total_iters: 30
+    power: 2.0
+run:
+  n_epoch: 30
+  val_per_epoch: 5
+  log_per_iter: 16

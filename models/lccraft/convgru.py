@@ -466,7 +466,8 @@ class LCCRAFT(nn.Module):
         depth_gen_pooling_size:int=1,
         depth_gen_max_depth:float=50.0,
         feat_poooling_size:Tuple[int,int]=[2,4],
-        fps_num:int=512):
+        fps_num:int=512,
+        loss_gamma:float=0.8):
         """
         `LCCRAFT: LCCRAFT: LiDAR and Camera Calibration Using Recurrent All-Pairs Field Transforms Without Precise Initial Guess`_.
 
@@ -528,6 +529,7 @@ class LCCRAFT(nn.Module):
 
         self.update_block = UpdateBlock(motion_encoder=motion_encoder, recurrent_block=recurrent_block, flow_head=flow_head)
         self.fps_num = fps_num
+        self.loss_gamma = loss_gamma
         self.buffer = dict()
 
     def restore_buffer(self, img:torch.Tensor):

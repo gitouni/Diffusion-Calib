@@ -19,7 +19,7 @@ class Surrogate(nn.Module):
 
     @timer.timer_func
     @abstractmethod
-    def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
+    def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict, *args):
         pass
 
     @abstractmethod
@@ -56,12 +56,17 @@ class RGGNet(Surrogate):
         self.pcd2depth = DepthImgGenerator(**pcd2depth_argv)
         self.kld_weight = kld_weight
         self.elbo_weight = ELBO_weight
+        self.depth_img = None
 
-    def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
+    def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict, store_depth:bool=True):
         # pcd_norm = torch.linalg.norm(pcd, dim=1)  # (B, N)
         pcd_tf = se3.transform(Tcl, pcd)
         depth_img = self.pcd2depth.project(pcd_tf, camera_info)
         x0 = self.encoder(img, depth_img)  # (B, D)
+        if store_depth:
+            self.depth_img = depth_img
+        else:
+            self.depth_img = None
         return x0  # (B, x_dim)
     
     def restore_buffer(self, img:torch.Tensor, pcd:torch.Tensor):
@@ -110,6 +115,14 @@ class LCCRAFT(Surrogate):
 
     def clear_buffer(self):
         self.encoder.clear_buffer()
+
+    def sequence_loss(self, x_pred_list:List[torch.Tensor], x_gt:torch.Tensor, loss_fn:Callable):
+        loss = 0
+        gamma_prod = 1.0
+        for x_pred in x_pred_list:
+            loss += loss_fn(x_pred, x_gt) * gamma_prod
+            gamma_prod *= self.encoder.loss_gamma
+        return loss
 
 
 class Aggregation(nn.Module):

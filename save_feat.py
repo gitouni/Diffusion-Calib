@@ -56,8 +56,8 @@ def main(config:Dict, debug_dir:str):
     y0 = surrogate_model.forward(img, pcd, init_tran, camera_info)  # rotation sensitivity
     perturb = torch.eye(4).unsqueeze(0).repeat(3,1,1).to(device)
     perturb[0,0,-1] = 0.01
-    perturb[1,0,-1] = 0.01
-    perturb[2,0,-1] = 0.01
+    perturb[1,1,-1] = 0.01
+    perturb[2,2,-1] = 0.01
     init_tran = torch.bmm(perturb, gt_se3)
     y0 = surrogate_model.forward(img, pcd, init_tran, camera_info)  # rotation sensitivity
     return y0
