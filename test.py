@@ -157,8 +157,7 @@ def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:log
             x0_list = []
             t0 = time.time()
             for _ in range(iters):
-                pcd_tf = se3.transform(H0, pcd)
-                delta_x = model.forward(img, pcd_tf, H0 @ init_extran, camera_info)
+                delta_x = model.forward(img, pcd, H0 @ init_extran, camera_info)
                 if not isinstance(delta_x, torch.Tensor):
                     H0 = delta_x[-1] @ H0
                 else:
@@ -224,7 +223,7 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
     checkpoints_dir.mkdir(exist_ok=True)
     log_dir = experiment_dir.joinpath(path_argv['log'])
     log_dir.mkdir(exist_ok=True)
-    # shutil.copyfile(config_path, str(log_dir.joinpath(os.path.basename(config_path))))  # copy the config file
+    shutil.copyfile(config_path, str(log_dir.joinpath(os.path.basename(config_path))))  # copy the config file
     # logger
     logger = logging.getLogger(path_argv['log'])
     logger.setLevel(logging.INFO)

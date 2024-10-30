@@ -17,7 +17,7 @@ from core.logger import LogTracker
 from core.tools import load_checkpoint_model_only
 import logging
 from pathlib import Path
-from typing import Dict, Literal, Iterable
+from typing import Dict, Literal, Iterable, List
 import time
 
 
@@ -40,8 +40,10 @@ def to_npy(x0:torch.Tensor) -> np.ndarray:
 
 
 @torch.inference_mode()
-def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:logging.Logger, device:torch.device, log_per_iter:int, res_dir:Path, iters:int):
-    model.eval()
+def test_multirange(test_loader:DataLoader, name:str, model_list:List[Surrogate], logger:logging.Logger,
+        device:torch.device, log_per_iter:int, res_dir:Path):
+    for model in model_list:
+        model.eval()
     logger.info("Test:")
     iterator = tqdm(test_loader, desc=name)
     tracker = LogTracker('Rx','Ry','Rz','tx','ty','tz','R','t','3d3c','5d5c','time')
@@ -56,12 +58,10 @@ def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:log
             batch_n = len(gt_se3)
             camera_info = batch['camera_info']
             H0 = torch.eye(4).unsqueeze(0).to(gt_se3)
-            model.restore_buffer(img, pcd)
             x0_list = []
             t0 = time.time()
-            for _ in range(iters):
-                pcd_tf = se3.transform(H0, pcd)
-                delta_x = model.forward(img, pcd_tf, H0 @ init_extran, camera_info)
+            for model in model_list:
+                delta_x = model.forward(img, pcd, H0 @ init_extran, camera_info)
                 if not isinstance(delta_x, torch.Tensor):
                     H0 = delta_x[-1] @ H0
                 else:
@@ -100,21 +100,18 @@ def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:log
     assert N_valid > 0, "Fatal Error, no valid batch!"
     return tracker.result(), N_valid / len(test_loader)
 
-def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative'], iters:int):
+def main(config:Dict, config_path:str):
     np.random.seed(config['seed'])
     torch.manual_seed(config['seed'])
     device = config['device']
-    surrogate_model:Surrogate = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
-    denoiser_class = RAFTDenoiser if config['model']['surrogate']['type'] == 'LCCRAFT' else Denoiser
-    denoiser = denoiser_class(surrogate_model)
-    dataset_argv = config['dataset']['test']
-    dataset_type = config['dataset']['type']
-    name_list, dataloader_list = get_dataloader(dataset_argv['dataset'], dataset_argv['dataloader'], dataset_type)
-    if model_type == 'diffusion':
-        diffuser = Diffuser(denoiser, **config['model']['diffuser'])
-        loss_func = get_loss(config['loss']['type'], **config['loss']['args'])
-        diffuser.set_loss(loss_func)
-        diffuser.set_new_noise_schedule(device)
+    assert path_argv['pretrain'] is not None, 'pretrained path must be assigned during test time.'
+    # logger
+    logger = logging.getLogger(path_argv['log'])
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logger_mode = 'w'
+    steps = len(config['steps'])
+    name = "mr_{}".format(steps)
     run_argv = config['run']
     path_argv = config['path']
     experiment_dir = Path(path_argv['base_dir'])
@@ -127,17 +124,7 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
     checkpoints_dir.mkdir(exist_ok=True)
     log_dir = experiment_dir.joinpath(path_argv['log'])
     log_dir.mkdir(exist_ok=True)
-    # shutil.copyfile(config_path, str(log_dir.joinpath(os.path.basename(config_path))))  # copy the config file
-    # logger
-    logger = logging.getLogger(path_argv['log'])
-    logger.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    logger_mode = 'w'
-    steps = config['model']['diffuser']['sampling_argv']['steps'] if 'diffusion' in model_type else iters
-    if model_type == 'diffusion':
-        name = "{}_{}".format(diffuser.sampling_type, steps)
-    else:
-        name = "{}_{}".format(model_type, steps)
+    shutil.copyfile(config_path, str(log_dir.joinpath(os.path.basename(config_path))))  # copy the config file
     res_dir = experiment_dir.joinpath(path_argv['results']).joinpath(name)
     if res_dir.exists():
         shutil.rmtree(str(res_dir))
@@ -149,27 +136,25 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
     logger.info('start traing')
     logger.info('args:')
     logger.info(args)
-    if path_argv['pretrain'] is not None:
-        load_checkpoint_model_only(path_argv['pretrain'], surrogate_model)
-        logger.info("Loaded checkpoint from {}".format(path_argv['pretrain']))
-    else:
-        raise FileNotFoundError("'pretrain' cannot be set to 'None' during test-time")
-    summary(surrogate_model)  # print the volume of model parameters
+    model_list = []
+    for pretrained_path in path_argv['pretrain']:
+        surrogate_model:Surrogate = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
+        load_checkpoint_model_only(pretrained_path, surrogate_model)
+        model_list.append(surrogate_model)
+        logger.info("Loaded checkpoint from {}".format(pretrained_path))
+    # summary(surrogate_model)  # print the volume of model parameters
     # exit(0)
+    dataset_argv = config['dataset']['test']
+    dataset_type = config['dataset']['type']
+    name_list, dataloader_list = get_dataloader(dataset_argv['dataset'], dataset_argv['dataloader'], dataset_type)
+
     # testing
     record_list = []
     for name, dataloader in zip(name_list, dataloader_list):
         surrogate_model.train()
         sub_res_dir = res_dir.joinpath(name)
         sub_res_dir.mkdir()
-        if model_type == 'diffusion' :
-            record, valid_ratio = test_diffuser(dataloader, name, diffuser, logger, device, run_argv['log_per_iter'], sub_res_dir)
-        elif model_type == 'iterative':
-            record, valid_ratio = test_iterative(dataloader,name, surrogate_model, logger, device, run_argv['log_per_iter'], sub_res_dir, iters)
-        # elif model_type == 'diffusion-guidance':
-        #     record, valid_ratio = test_diffuser_guidance(dataloader, name, diffuser, probnet, classifier_fn_argv, logger, device, run_argv['log_per_iter'], res_dir)
-        else:
-            raise NotImplementedError("Unknown model_type:{}".format(model_type))
+        record, valid_ratio = test_multirange(dataloader,name, model_list, logger, device, run_argv['log_per_iter'], sub_res_dir)
         logger.info("{}: {} | valid: {:.2%}".format(name, record, valid_ratio))
         record_list.append([name, record, valid_ratio])
     logger.info("Summary:")  # view in the bottom
@@ -179,12 +164,13 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_config', default="cfg/dataset/kitti_large.yml", type=str)
-    parser.add_argument("--model_config",type=str,default="cfg/unipc_model/main.yml")
-    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='iterative')
-    parser.add_argument("--iters",type=int,default=1)
+    parser.add_argument('--dataset_config', type=str, default="cfg/dataset/kitti_large.yml")
+    parser.add_argument("--model_config",type=str, default="cfg/multirange_model/main.yml")
+    parser.add_argument("--multirange_config",type=str, default="cfg/dataset/multirange.yml")
     args = parser.parse_args()
     dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
+    multirange_config = yaml.load(open(args.multirange_config, 'r'), yaml.SafeLoader)
     config = yaml.load(open(args.model_config,'r'), yaml.SafeLoader)
+    config.update(multirange_config)
     config.update(dataset_config)
-    main(config, args.model_config, args.model_type, args.iters)
+    main(config, args.model_config)
