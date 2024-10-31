@@ -157,8 +157,7 @@ def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:log
             x0_list = []
             t0 = time.time()
             for _ in range(iters):
-                pcd_tf = se3.transform(H0, pcd)
-                delta_x = model.forward(img, pcd_tf, H0 @ init_extran, camera_info)
+                delta_x = model.forward(img, pcd, H0 @ init_extran, camera_info)
                 if not isinstance(delta_x, torch.Tensor):
                     H0 = delta_x[-1] @ H0
                 else:
@@ -224,7 +223,7 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
     checkpoints_dir.mkdir(exist_ok=True)
     log_dir = experiment_dir.joinpath(path_argv['log'])
     log_dir.mkdir(exist_ok=True)
-    # shutil.copyfile(config_path, str(log_dir.joinpath(os.path.basename(config_path))))  # copy the config file
+    shutil.copyfile(config_path, str(log_dir.joinpath(os.path.basename(config_path))))  # copy the config file
     # logger
     logger = logging.getLogger(path_argv['log'])
     logger.setLevel(logging.INFO)
@@ -256,7 +255,6 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
     # testing
     record_list = []
     for name, dataloader in zip(name_list, dataloader_list):
-        surrogate_model.train()
         sub_res_dir = res_dir.joinpath(name)
         sub_res_dir.mkdir()
         if model_type == 'diffusion' :
@@ -277,8 +275,8 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_config', default="cfg/dataset/kitti_large.yml", type=str)
-    parser.add_argument("--model_config",type=str,default="cfg/unipc_model/lccraft_small.yml")
-    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='diffusion')
+    parser.add_argument("--model_config",type=str,default="cfg/unipc_model/main.yml")
+    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='iterative')
     parser.add_argument("--iters",type=int,default=1)
     args = parser.parse_args()
     dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
