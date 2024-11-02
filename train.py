@@ -197,7 +197,7 @@ def main(config:Dict, config_path:Union[str, Iterable[str]]):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_config', default="cfg/dataset/kitti_large.yml", type=str)
-    parser.add_argument("--model_config",type=str,default="cfg/unipc_model/main.yml")
+    parser.add_argument("--model_config",type=str,default="cfg/unipc_model/projfusion.yml")
     args = parser.parse_args()
     dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
     config = yaml.load(open(args.model_config,'r'), yaml.SafeLoader)

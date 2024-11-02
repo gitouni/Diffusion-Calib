@@ -8,6 +8,7 @@ from models.util.transform import inv_pose_np
 from pprint import pprint
 from collections import OrderedDict
 import json
+from pathlib import Path
 
 def se3_err(pred_se3:np.ndarray, gt_se3:np.ndarray) -> Tuple[np.ndarray,np.ndarray]:
     delta_se3 = pred_se3 @ inv_pose_np(gt_se3)
@@ -31,6 +32,8 @@ if __name__ == "__main__":
     metrics = OrderedDict({"Rx":[], "Ry":[], "Rz":[], "tx":[], "ty":[], "tz":[],"R":[],"t":[],"3d3c":[],"5d5c":[]})
     print("Compute metrics on {}".format(names))
     metric_list = []
+    log_path = os.path.dirname(args.log_file)
+    Path(log_path).mkdir(parents=True, exist_ok=True)
     if os.path.exists(args.log_file):
         os.remove(args.log_file)
     for name, gt_file, pred_subdir in zip(names, gt_files, pred_dirs):
