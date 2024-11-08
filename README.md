@@ -34,7 +34,7 @@ ln -s /path/to/kitti/ kitti
 cd ..
 ```
 # Train
-* You can download our [pretrained models](https://github.com/gitouni/SurrogateCalib/releases/download/0.1/LSD_chkpt.zip) trained on KITTI Odometry Dataset or train them following the instructions.
+* You can download our [pretrained models](https://github.com/gitouni/SurrogateCalib/releases/download/1.0/LSD_chkpt.zip) trained on KITTI Odometry Dataset or train them following the instructions.
 * Train a surrogate model (dataset config + model config)
 ```bash
 python train.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/unipc_model/main.yml
