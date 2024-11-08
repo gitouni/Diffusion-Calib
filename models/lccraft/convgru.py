@@ -386,11 +386,14 @@ class FlowHead(nn.Module):
 
     def __init__(self, *, in_channels:int, hidden_size:int, pooling_size:Tuple[int,int]):
         super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, hidden_size, 3, padding=1),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(hidden_size, hidden_size, 3, padding=1)
+        )
         self.pooling = nn.AdaptiveAvgPool2d(pooling_size)
-        inplanes = hidden_size * pooling_size[0] * pooling_size[1]
-        self.conv1 = nn.Conv2d(in_channels, hidden_size, 3, padding=1)
-        self.conv2 = nn.Conv2d(hidden_size, 2, 3, padding=1)
-        self.relu = nn.ReLU(inplace=True)
+        self.flatten = nn.Flatten(start_dim=1)
+        inplanes = hidden_size * pooling_size[0] * pooling_size[1] + 6  # add last delta_x
         self.mlp = MLPNet(head_dims=[inplanes, 256], sub_dims=[256, 3], activation_func=nn.LeakyReLU(0.1, inplace=True))
         self.pcd = None
         self.camera_info = None
@@ -405,13 +408,14 @@ class FlowHead(nn.Module):
             self.camera_info = camera_info
             self.uv0 = project_pc2image(pcd, self.camera_info)  # (B, 2, N)
 
-    def forward(self, hidden_state:torch.Tensor, Tcl:torch.Tensor):
+    def forward(self, hidden_state:torch.Tensor, last_x:torch.Tensor):
         if self.pcd is None or self.uv0 is None:
             raise ValueError("must call initialize() before forward.")
-        x = self.relu(self.conv1(hidden_state))
-        x = torch.flatten(self.pooling(x), start_dim=1)  # (B, C, H, W) -> (B, C*H*W)
-        x = self.mlp(x)  # predict delta_x
-        pcd_tf = se3.transform(se3.exp(x) @ Tcl, self.pcd)
+        x = self.conv(hidden_state)
+        x = self.pooling(x)
+        x = self.flatten(x)  # (B, C, H, W) -> (B, C*H*W)
+        x = self.mlp(torch.cat([x, last_x], dim=1))  # predict delta_x
+        pcd_tf = se3.transform(se3.exp(x), self.pcd)
         uv = project_pc2image(pcd_tf, self.camera_info)  # (B, 2, N)
         sparse_flow2d = uv - self.uv0
         return x, sparse_flow2d, self.uv0
@@ -433,11 +437,11 @@ class UpdateBlock(nn.Module):
         self.camera_info = None
 
 
-    def forward(self, hidden_state, context, corr_features, flow, confidence_map, Tcl) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, hidden_state, last_x, context, corr_features, flow, confidence_map) -> Tuple[torch.Tensor, torch.Tensor]:
         motion_features = self.motion_encoder(flow, corr_features, confidence_map)
         x = torch.cat([context, motion_features], dim=1)
         hidden_state = self.recurrent_block(hidden_state, x)
-        x, sparse_flow, uv = self.flow_head(hidden_state, Tcl)
+        x, sparse_flow, uv = self.flow_head(hidden_state, last_x)
         return hidden_state, x, sparse_flow, uv
     
 
@@ -466,7 +470,8 @@ class LCCRAFT(nn.Module):
         depth_gen_pooling_size:int=1,
         depth_gen_max_depth:float=50.0,
         feat_poooling_size:Tuple[int,int]=[2,4],
-        fps_num:int=512):
+        fps_num:int=1024,
+        loss_gamma:float=0.8):
         """
         `LCCRAFT: LCCRAFT: LiDAR and Camera Calibration Using Recurrent All-Pairs Field Transforms Without Precise Initial Guess`_.
 
@@ -528,6 +533,7 @@ class LCCRAFT(nn.Module):
 
         self.update_block = UpdateBlock(motion_encoder=motion_encoder, recurrent_block=recurrent_block, flow_head=flow_head)
         self.fps_num = fps_num
+        self.loss_gamma = loss_gamma
         self.buffer = dict()
 
     def restore_buffer(self, img:torch.Tensor):
@@ -537,7 +543,7 @@ class LCCRAFT(nn.Module):
     def clear_buffer(self):
         self.buffer.clear()
 
-    def forward(self, img:torch.Tensor, pcd_tf:torch.Tensor, camera_info:Dict, num_flow_updates: int = 12):
+    def forward(self, img:torch.Tensor, pcd_tf:torch.Tensor, camera_info:Dict, num_flow_updates: int = 5):
         batch_size, _, h, w = img.shape
         if not (h % 8 == 0) and (w % 8 == 0):
             raise ValueError(f"input image H and W should be divisible by 8, insted got {h} (h) and {w} (w)")
@@ -586,15 +592,16 @@ class LCCRAFT(nn.Module):
         context = F.relu(context)
         coords0 = make_coords_grid(batch_size, h // 8, w // 8).to(img_fmap.device)  # (B, 2, H, W)
         coords1 = torch.clone(coords0)  # (B, 2, H, W)
-        Tcl = torch.eye(4)[None].repeat(batch_size, 1, 1).to(pcd_tf)
-        Tcl_predictions = [Tcl]
+        last_x = torch.zeros([batch_size, 6]).to(context)
+        x_preds = []
         dense_flow = torch.zeros_like(coords0)  # (B, 2, H, W)
         for _ in range(num_flow_updates):
             corr_features = self.corr_block.index_pyramid(centroids_coords=(dense_flow + coords0).detach())
-            hidden_state, x, sprase_flow, uv = self.update_block(hidden_state, context, corr_features, dense_flow, confidence_map, Tcl_predictions[-1])
+            hidden_state, x, sprase_flow, uv = self.update_block(hidden_state, last_x, context, corr_features, dense_flow, confidence_map)
             dense_flow = knn_interpolation(uv, sprase_flow, torch.flatten(coords1, start_dim=-2), k=3).reshape(batch_size, 2, feat_h, feat_w)
-            Tcl_predictions.append(se3.exp(x) @ Tcl_predictions[-1])
-        return Tcl_predictions[1:]
+            last_x = x.clone().detach()
+            x_preds.append(x)
+        return x_preds
     
     @staticmethod
     def sequence_loss(x_preds:List[torch.Tensor], x_gt:torch.Tensor, loss_fn:Callable, gamma:float):
