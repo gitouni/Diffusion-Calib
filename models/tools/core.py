@@ -11,6 +11,7 @@ from .utils import project_pc2image, build_pc_pyramid_single, se3_transform
 from .csrc import correlation2d
 from .clfm import FusionAwareInterp
 from ..Modules import resnet18 as custom_resnet
+from ..Modules import BottleneckBlock, ResidualBlock, FeatureEncoder
 # from .embedding import PoseEmbedding
 # from mmdet.models.backbones import ResNet
 from typing import Literal, List, Dict, Tuple
@@ -166,6 +167,32 @@ class ResnetEncoder(nn.Module):
         features.append(self.encoder.layer3(features[-1]))
         features.append(self.encoder.layer4(features[-1]))
         return features
+
+class SimpleEncoder(nn.Module):
+    def __init__(self, block_type:Literal['residualblock','bottleneck'], 
+                 norm_type:Literal['instancenorm','batchnorm'],
+            in_chan:int, layers:List[int]=[96,96,128,192,256], strides:List[int]=[2,1,2,2]):
+        """Simple Encoder for 8x Downsampling
+
+        Args:
+            block_type (Literal[&#39;residualblock&#39;,&#39;bottleneck&#39;]): _description_
+            norm_type (Literal[&#39;instancenorm&#39;,&#39;batchnorm&#39;]): _description_
+            in_chan (int): input channel
+            layers (List[int], optional): 5 elements. Defaults to [96,96,128,192,256].
+            strides (List[int], optional): 4. Defaults to [2,1,2,2].
+        """
+        if block_type == 'bottleneck':
+            block = BottleneckBlock
+        else:
+            block = ResidualBlock
+        if norm_type == 'instancenorm':
+            norm_layer = nn.InstanceNorm2d
+        else:
+            norm_layer = nn.BatchNorm2d
+        self.encoder = FeatureEncoder(block=block, in_chan=in_chan, layers=layers, strides=strides, norm_layer=norm_layer)
+        self.downsample_factor = self.encoder.downsample_factor
+    def forward(self, x):
+        return self.encoder(x)
     
 class Encoder2D(nn.Module):
     def __init__(self, depth:Literal[18, 34, 50, 101, 152]=18, pretrained:bool=True):

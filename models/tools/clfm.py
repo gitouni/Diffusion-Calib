@@ -67,7 +67,7 @@ class FusionAwareInterp(nn.Module):
             Conv2dNormRelu(k, n_channels_3d, act='sigmoid'),
         )
 
-    def forward(self, uv:torch.Tensor, feat_2d_shape:Tuple[int,int,int,int], feat_3d:torch.Tensor):
+    def forward(self, uv:torch.Tensor, feat_2d_shape:Tuple[int,int], feat_3d:torch.Tensor):
         bs, _, image_h, image_w = feat_2d_shape
         n_channels_3d = feat_3d.shape[1]
 

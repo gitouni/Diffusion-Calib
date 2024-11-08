@@ -8,6 +8,7 @@ from models.util.transform import inv_pose_np
 from pprint import pprint
 from collections import OrderedDict
 import json
+from pathlib import Path
 
 def se3_err(pred_se3:np.ndarray, gt_se3:np.ndarray) -> Tuple[np.ndarray,np.ndarray]:
     delta_se3 = pred_se3 @ inv_pose_np(gt_se3)
@@ -17,9 +18,9 @@ def se3_err(pred_se3:np.ndarray, gt_se3:np.ndarray) -> Tuple[np.ndarray,np.ndarr
 
 def options():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pred_dir_root",type=str,default="experiments/large/main/kitti/results/iterative_1")
+    parser.add_argument("--pred_dir_root",type=str,default="experiments/multirange/main/kitti/results/iterative_1")
     parser.add_argument("--gt_dir",type=str,default="cache/kitti_gt")
-    parser.add_argument("--log_file",type=str,default="log/large/main.json")
+    parser.add_argument("--log_file",type=str,default="log/multirange/main.json")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -31,6 +32,8 @@ if __name__ == "__main__":
     metrics = OrderedDict({"Rx":[], "Ry":[], "Rz":[], "tx":[], "ty":[], "tz":[],"R":[],"t":[],"3d3c":[],"5d5c":[]})
     print("Compute metrics on {}".format(names))
     metric_list = []
+    log_path = os.path.dirname(args.log_file)
+    Path(log_path).mkdir(parents=True, exist_ok=True)
     if os.path.exists(args.log_file):
         os.remove(args.log_file)
     for name, gt_file, pred_subdir in zip(names, gt_files, pred_dirs):

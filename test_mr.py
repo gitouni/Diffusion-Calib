@@ -2,14 +2,13 @@ import os
 import shutil
 import numpy as np
 import argparse
-from torchinfo import summary
+# from torchinfo import summary
 import torch
 from torch.utils.data import DataLoader
 from dataset import PerturbDataset
 from dataset import __classdict__ as DatasetDict
-from models.denoiser import Denoiser, RAFTDenoiser, Surrogate, __classdict__ as DenoiserDict
-from models.diffuser import Diffuser
-from models.loss import se3_err, get_loss
+from models.denoiser import Surrogate, __classdict__ as DenoiserDict
+from models.loss import se3_err
 from tqdm import tqdm
 import yaml
 from models.util import se3
@@ -18,8 +17,7 @@ from core.tools import load_checkpoint_model_only
 import logging
 from pathlib import Path
 from typing import Dict, Literal, Iterable, List
-import time
-
+from core.tools import Timer
 
 def get_dataloader(test_dataset_argv:Iterable[Dict], test_dataloader_argv:Dict, dataset_type:str):
     name_list = []
@@ -59,16 +57,15 @@ def test_multirange(test_loader:DataLoader, name:str, model_list:List[Surrogate]
             camera_info = batch['camera_info']
             H0 = torch.eye(4).unsqueeze(0).to(gt_se3)
             x0_list = []
-            t0 = time.time()
-            for model in model_list:
-                delta_x = model.forward(img, pcd, H0 @ init_extran, camera_info)
-                if not isinstance(delta_x, torch.Tensor):
-                    H0 = delta_x[-1] @ H0
-                else:
+            with Timer() as timer:
+                for model in model_list:
+                    delta_x = model.forward(img, pcd, H0 @ init_extran, camera_info)
+                    if not isinstance(delta_x, torch.Tensor):
+                        delta_x = delta_x[-1]
                     H0 = se3.exp(delta_x) @ H0
-                save_x = to_npy(se3.log(H0 @ init_extran))  # (6,)
-                x0_list.append(save_x)
-            dt = time.time() - t0
+                    save_x = to_npy(se3.log(H0 @ init_extran))  # (6,)
+                    x0_list.append(save_x)
+            dt = timer.elapsed_time
             tracker.update('time', dt, batch_n)
             batched_x0_list = np.stack(x0_list, axis=1)  # (B, K, 6)
             for x0 in batched_x0_list:
@@ -104,16 +101,12 @@ def main(config:Dict, config_path:str):
     np.random.seed(config['seed'])
     torch.manual_seed(config['seed'])
     device = config['device']
-    assert path_argv['pretrain'] is not None, 'pretrained path must be assigned during test time.'
-    # logger
-    logger = logging.getLogger(path_argv['log'])
-    logger.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    logger_mode = 'w'
-    steps = len(config['steps'])
-    name = "mr_{}".format(steps)
     run_argv = config['run']
     path_argv = config['path']
+    dataset_argv = config['dataset']['test']
+    dataset_type = config['dataset']['type']
+    steps = len(config['stages'])
+    name = "mr_{}".format(steps)
     experiment_dir = Path(path_argv['base_dir'])
     experiment_dir.mkdir(exist_ok=True)
     experiment_dir = experiment_dir.joinpath(path_argv['name'])
@@ -129,6 +122,12 @@ def main(config:Dict, config_path:str):
     if res_dir.exists():
         shutil.rmtree(str(res_dir))
     res_dir.mkdir(exist_ok=True,parents=True)
+    
+    # logger
+    logger = logging.getLogger(path_argv['log'])
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logger_mode = 'w'
     file_handler = logging.FileHandler(str(log_dir) + '/test_{}.log'.format(name), mode=logger_mode)
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
@@ -137,6 +136,7 @@ def main(config:Dict, config_path:str):
     logger.info('args:')
     logger.info(args)
     model_list = []
+    assert path_argv['pretrain'] is not None, 'pretrained path must be assigned during test time.'
     for pretrained_path in path_argv['pretrain']:
         surrogate_model:Surrogate = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
         load_checkpoint_model_only(pretrained_path, surrogate_model)
@@ -144,14 +144,10 @@ def main(config:Dict, config_path:str):
         logger.info("Loaded checkpoint from {}".format(pretrained_path))
     # summary(surrogate_model)  # print the volume of model parameters
     # exit(0)
-    dataset_argv = config['dataset']['test']
-    dataset_type = config['dataset']['type']
     name_list, dataloader_list = get_dataloader(dataset_argv['dataset'], dataset_argv['dataloader'], dataset_type)
-
     # testing
     record_list = []
     for name, dataloader in zip(name_list, dataloader_list):
-        surrogate_model.train()
         sub_res_dir = res_dir.joinpath(name)
         sub_res_dir.mkdir()
         record, valid_ratio = test_multirange(dataloader,name, model_list, logger, device, run_argv['log_per_iter'], sub_res_dir)
@@ -165,8 +161,8 @@ def main(config:Dict, config_path:str):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_config', type=str, default="cfg/dataset/kitti_large.yml")
-    parser.add_argument("--model_config",type=str, default="cfg/multirange_model/main.yml")
-    parser.add_argument("--multirange_config",type=str, default="cfg/dataset/multirange.yml")
+    parser.add_argument("--model_config",type=str, default="cfg/multirange_model/lccraft_large.yml")
+    parser.add_argument("--multirange_config",type=str, default="cfg/dataset/mr_5.yml")
     args = parser.parse_args()
     dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
     multirange_config = yaml.load(open(args.multirange_config, 'r'), yaml.SafeLoader)

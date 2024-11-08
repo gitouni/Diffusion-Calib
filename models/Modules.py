@@ -7,7 +7,9 @@ Created on Tue Jun 29 23:39:37 2021
 import torch.nn as nn
 from torch.nn import functional as F
 import torch
-
+from torchvision.ops import Conv2dNormActivation
+from torch.nn.modules.batchnorm import BatchNorm2d
+from torch.nn.modules.instancenorm import InstanceNorm2d
 
 def conv3x3(in_planes, out_planes, stride=1, padding=1, dilation=1):
     """
@@ -15,6 +17,142 @@ def conv3x3(in_planes, out_planes, stride=1, padding=1, dilation=1):
     """
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
                      padding=padding, dilation=dilation, bias=False)
+
+
+class BottleneckBlock(nn.Module):
+    """Slightly modified BottleNeck block (extra relu and biases)"""
+
+    def __init__(self, in_channels, out_channels, *, norm_layer, stride=1):
+        super().__init__()
+
+        # See note in ResidualBlock for the reason behind bias=True
+        self.convnormrelu1 = Conv2dNormActivation(
+            in_channels, out_channels // 4, norm_layer=norm_layer, kernel_size=1, bias=True
+        )
+        self.convnormrelu2 = Conv2dNormActivation(
+            out_channels // 4, out_channels // 4, norm_layer=norm_layer, kernel_size=3, stride=stride, bias=True
+        )
+        self.convnormrelu3 = Conv2dNormActivation(
+            out_channels // 4, out_channels, norm_layer=norm_layer, kernel_size=1, bias=True
+        )
+        self.relu = nn.ReLU(inplace=True)
+
+        if stride == 1:
+            self.downsample = nn.Identity()
+        else:
+            self.downsample = Conv2dNormActivation(
+                in_channels,
+                out_channels,
+                norm_layer=norm_layer,
+                kernel_size=1,
+                stride=stride,
+                bias=True,
+                activation_layer=None,
+            )
+
+    def forward(self, x):
+        y = x
+        y = self.convnormrelu1(y)
+        y = self.convnormrelu2(y)
+        y = self.convnormrelu3(y)
+
+        x = self.downsample(x)
+
+        return self.relu(x + y)
+
+
+class ResidualBlock(nn.Module):
+    """Slightly modified Residual block with extra relu and biases."""
+
+    def __init__(self, in_channels, out_channels, *, norm_layer, stride=1, always_project: bool = False):
+        super().__init__()
+
+        # Note regarding bias=True:
+        # Usually we can pass bias=False in conv layers followed by a norm layer.
+        # But in the RAFT training reference, the BatchNorm2d layers are only activated for the first dataset,
+        # and frozen for the rest of the training process (i.e. set as eval()). The bias term is thus still useful
+        # for the rest of the datasets. Technically, we could remove the bias for other norm layers like Instance norm
+        # because these aren't frozen, but we don't bother (also, we woudn't be able to load the original weights).
+        self.convnormrelu1 = Conv2dNormActivation(
+            in_channels, out_channels, norm_layer=norm_layer, kernel_size=3, stride=stride, bias=True
+        )
+        self.convnormrelu2 = Conv2dNormActivation(
+            out_channels, out_channels, norm_layer=norm_layer, kernel_size=3, bias=True
+        )
+
+        # make mypy happy
+        self.downsample: nn.Module
+
+        if stride == 1 and not always_project:
+            self.downsample = nn.Identity()
+        else:
+            self.downsample = Conv2dNormActivation(
+                in_channels,
+                out_channels,
+                norm_layer=norm_layer,
+                kernel_size=1,
+                stride=stride,
+                bias=True,
+                activation_layer=None,
+            )
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        y = x
+        y = self.convnormrelu1(y)
+        y = self.convnormrelu2(y)
+
+        x = self.downsample(x)
+
+        return self.relu(x + y)
+    
+class FeatureEncoder(nn.Module):
+    """The feature encoder, used both as the actual feature encoder, and as the context encoder.
+
+    It must downsample its input by 8.
+    """
+
+    def __init__(
+        self, *, block=ResidualBlock, in_chan=3, layers=(64, 64, 96, 128, 256), strides=(2, 1, 2, 2), norm_layer=nn.BatchNorm2d
+    ):
+        super().__init__()
+
+        if len(layers) < 3:
+            raise ValueError(f"The expected number of layers should over 3, instead got {len(layers)}")
+
+        # See note in ResidualBlock for the reason behind bias=True
+        self.convnormrelu = Conv2dNormActivation(
+            in_chan, layers[0], norm_layer=norm_layer, kernel_size=7, stride=strides[0], bias=True
+        )
+        nn_layers = []
+        for i in range(len(layers)-2):
+            nn_layers.append(self._make_2_blocks(block, layers[i], layers[i+1], norm_layer=norm_layer, first_stride=strides[i+1]))
+        self.layers = nn.Sequential(*nn_layers)
+        self.conv = nn.Conv2d(layers[-2], layers[-1], kernel_size=1)
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            elif isinstance(m, (nn.BatchNorm2d, nn.InstanceNorm2d)):
+                if m.weight is not None:
+                    nn.init.constant_(m.weight, 1)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+        num_downsamples = len(list(filter(lambda s: s == 2, strides)))
+        self.output_dim = layers[-1]
+        self.downsample_factor = 2**num_downsamples
+
+    def _make_2_blocks(self, block, in_channels, out_channels, norm_layer, first_stride):
+        block1 = block(in_channels, out_channels, norm_layer=norm_layer, stride=first_stride)
+        block2 = block(out_channels, out_channels, norm_layer=norm_layer, stride=1)
+        return nn.Sequential(block1, block2)
+
+    def forward(self, x):
+        x = self.convnormrelu(x)
+        x = self.layers(x)
+        x = self.conv(x)
+        return x
 
 class BasicBlock(nn.Module):
     expansion = 1
@@ -60,53 +198,7 @@ class ConvModule(nn.Module):
         x = self.bn(x)
         out = self.activate(x)
         return out
-        
-class ASPPHead(nn.Module):
-    def __init__(self,num_classes):
-        super(ASPPHead,self).__init__()
-        self.dropout = nn.Dropout2d(p=0.1)
-        self.conv_seg = nn.Conv2d(128,num_classes,kernel_size=1,stride=1)
-        self.image_pool = nn.Sequential(
-            nn.AdaptiveAvgPool2d(output_size=1),
-            ConvModule(512,128,kernel_size=1,stride=1,bias=False),
-            ) 
-        self.aspp_modules = nn.ModuleList([
-            ConvModule(512, 128, kernel_size=1,stride=1,bias=False),
-            ConvModule(512, 128, kernel_size=3,stride=1,padding=12,dilation=12,bias=False),
-            ConvModule(512, 128, kernel_size=3,stride=1,padding=24,dilation=24,bias=False),
-            ConvModule(512, 128, kernel_size=3,stride=1,padding=36,dilation=36,bias=False),
-            ])
-        self.bottleneck = ConvModule(640, 128, kernel_size=3,stride=1,padding=1,bias=False)
-    def forward(self,feature_map):
-        feature_map_h = feature_map.size()[2] # (== h/16)
-        feature_map_w = feature_map.size()[3] # (== w/16)
-        out_1x1 = self.aspp_modules[0](feature_map) # (shape: (batch_size, 128, h/16, w/16))
-        out_3x3_1 = self.aspp_modules[1](feature_map) # (shape: (batch_size, 128, h/16, w/16))
-        out_3x3_2 = self.aspp_modules[2](feature_map) # (shape: (batch_size, 128, h/16, w/16))
-        out_3x3_3 = self.aspp_modules[3](feature_map) # (shape: (batch_size, 128, h/16, w/16))
-        out_img = self.image_pool(feature_map) # (shape: (batch_size, 128, h/16, w/16))
-        out_img = F.interpolate(out_img, size=(feature_map_h, feature_map_w), mode="bilinear") # (shape: (batch_size, 128, h/16, w/16))
-        out = torch.cat([out_1x1, out_3x3_1, out_3x3_2, out_3x3_3, out_img], 1) # (shape: (batch_size, 640, h/16, w/16))
-        out = self.bottleneck(out) # (shape: (batch_size, 128, h/16, w/16))
-        out = self.dropout(out) # (shape: (batch_size, 128, h/16, w/16))
-        out = self.conv_seg(out) # (shape: (batch_size, num_classes, h/16, w/16))
-        return out
-
-class FCNHead(nn.Module):
-    def __init__(self,num_classes=2,inplanes=256):
-        super(FCNHead,self).__init__()
-        planes = inplanes // 4
-        self.conv_seg = nn.Conv2d(planes,num_classes,kernel_size=1,stride=1)
-        self.dropout = nn.Dropout2d(p=0.1)
-        self.convs = nn.Sequential(
-            ConvModule(inplanes, planes, kernel_size=3,stride=1,padding=1,bias=False)
-            )
-    def forward(self,x):
-        x = self.convs(x)
-        x = self.dropout(x)
-        x = self.conv_seg(x)
-        return x
-    
+       
 class resnet18(nn.Module):
     def __init__(self, inplanes=1, planes=32):
         super(resnet18,self).__init__()
@@ -150,34 +242,6 @@ class resnet18(nn.Module):
         out3 = self.layer3(out2)
         out4 = self.layer4(out3)
         return out1, out2, out3, out4
-    
-class EncoderDecoder(nn.Module):
-    def __init__(self,num_classes=2,auxiliary_loss=True, backbone_pretrained=True):
-        super(EncoderDecoder,self).__init__()
-        self.backbone = resnet18()
-        self.decode_head = ASPPHead(num_classes=num_classes)
-        self.auxiliary_loss = auxiliary_loss
-        if auxiliary_loss:
-            self.auxiliary_head = FCNHead(num_classes=num_classes,inplanes=256)
-        else:
-            self.auxiliary_head = None
-        if backbone_pretrained:
-            backbone_state = torch.load("resnetV1C.pth")['state_dict']
-            for key in self.backbone.state_dict().keys():
-                assert key in backbone_state.keys(), "backbone state-dict mismatch"
-            self.backbone.load_state_dict(backbone_state,strict=False)
-            print("pretrained model loaded!")
-    def forward(self,x):
-        input_shape = x.shape[-2:]
-        feat = self.backbone(x)
-        decode_seg = self.decode_head(feat[-1])
-        decode_seg = F.interpolate(decode_seg, size=input_shape, mode='bilinear', align_corners=False)
-        if (not self.auxiliary_loss) or (not self.training):
-            return decode_seg
-        else:
-            aux_seg = self.auxiliary_head(feat[-2])
-            aux_seg = F.interpolate(aux_seg, size=input_shape, mode='bilinear', align_corners=False)
-            return decode_seg, aux_seg
     
 if __name__ == "__main__":
     model = resnet18()

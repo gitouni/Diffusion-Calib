@@ -17,7 +17,7 @@ from core.tools import load_checkpoint_model_only
 import logging
 from pathlib import Path
 from typing import Dict, Literal, Iterable
-import time
+from core.tools import Timer
 
 def get_dataloader(test_dataset_argv:Iterable[Dict], test_dataloader_argv:Dict, dataset_type:str):
     name_list = []
@@ -52,9 +52,9 @@ def test_diffuser(test_loader:DataLoader, name:str, diffuser:SE3Diffuser, logger
             gt_se3 = batch['gt'].to(device)  # transform uncalibrated_pcd to calibrated_pcd
             batch_n = len(gt_se3)
             camera_info = batch['camera_info']
-            t0 = time.time()
-            x0_list = diffuser.sampling((img, pcd, init_extran, camera_info), return_intermediate=True)
-            dt = time.time() - t0
+            with Timer() as timer:
+                x0_list = diffuser.sampling((img, pcd, init_extran, camera_info), return_intermediate=True)
+            dt = timer.elapsed_time
             tracker.update('time', dt, batch_n)
             x0_se3 = x0_list[-1]
             x0_npy_list = [to_npy(se3.log(x0 @ init_extran)) for x0 in x0_list]

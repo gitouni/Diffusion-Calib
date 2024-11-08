@@ -172,8 +172,14 @@ def main(config:Dict, config_path:Union[str, Iterable[str]]):
                         ELBO = diffuser.x0_fn.loss(x0_hat, (img, pcd, init_extran, camera_info))
                     loss = loss + ELBO
                 loss.backward()
-                nn.utils.clip_grad_norm_(diffuser.x0_fn.model.parameters(), max_norm=clip_grad, norm_type=2)  # avoid gradient explosion
-                optimizer.step()
+                try:
+                    nn.utils.clip_grad_norm_(diffuser.x0_fn.model.parameters(), clip_grad, norm_type=2, error_if_nonfinite=True)  # avoid gradient explosion
+                    optimizer.step()
+                except:
+                    logger.warning("nan detected in grad, skip batch.")
+                    iterator.update(1)
+                    optimizer.zero_grad()
+                    continue
                 with torch.inference_mode():
                     R_loss, t_loss = geodesic_loss(se3.exp(x0_hat), gt_se3)
                 tracker.update('R',R_loss.item())
@@ -197,7 +203,7 @@ def main(config:Dict, config_path:Union[str, Iterable[str]]):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_config', default="cfg/dataset/kitti_large.yml", type=str)
-    parser.add_argument("--model_config",type=str,default="cfg/unipc_model/main.yml")
+    parser.add_argument("--model_config",type=str,default="cfg/unipc_model/projfusion.yml")
     args = parser.parse_args()
     dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
     config = yaml.load(open(args.model_config,'r'), yaml.SafeLoader)

@@ -1,22 +1,21 @@
+# ProjFusion without depth feature F_D
 seed: 0
 device: cuda:0
 path:
-  name: main
+  name: main_ponly
   base_dir: experiments/multirange/
   log: log
   results: results
   checkpoint: checkpoint
   resume: null
   pretrain: &pretrained_model
-    - experiments/multirange/main/checkpoint/best_stage_0.pth
-    - experiments/multirange/main/checkpoint/best_stage_1.pth
-    - experiments/multirange/main/checkpoint/best_stage_2.pth
-    - experiments/multirange/main/checkpoint/best_stage_3.pth
-    - experiments/multirange/main/checkpoint/best_stage_4.pth
+    - experiments/multirange/main_ponly/checkpoint/best_stage_0.pth
+    - experiments/multirange/main_ponly/checkpoint/best_stage_1.pth
+    - experiments/multirange/main_ponly/checkpoint/best_stage_2.pth
   
 model:
   surrogate:
-    type: ProjFusionNet  # Chosen from ['ProjFusionNet','LCCNet','CalibNet','RGGNet','LCCRAFT'], argv should match relative class as well
+    type: ProjFusionNet  # Chosen from ['ProjFusionNet','LCCNet','CalibNet'], argv should match relative class as well
     argv:
       activation: leakyrelu
       inplace: true
@@ -25,8 +24,6 @@ model:
         resnet_pretrained: true
         encoder_3d_chans: [32, 64, 128, 256]
         pcd_pyramid: [4096, 2048, 1024, 512]
-        max_depth: 50.0
-        proj_planes: 32
         encoder_3d_knn: 16
         fusion_knn: 4
       aggregation_argv:
@@ -35,7 +32,7 @@ model:
         rot_mlp_dims: [256, 256]
         tsl_mlp_dims: [256, 256]
       proj_features: true
-      depth_features: true
+      depth_features: false
 
 loss:
   type: mae

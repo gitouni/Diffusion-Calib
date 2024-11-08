@@ -8,6 +8,7 @@ from torch.nn.modules.instancenorm import InstanceNorm2d
 from ..tools.core import MLPNet, DepthImgGenerator
 from ..tools.utils import project_pc2image, furthest_point_sampling, batch_indexing, knn_interpolation
 from ..util import se3
+from ..Modules import BottleneckBlock, ResidualBlock, FeatureEncoder
 
 def grid_sample(img: torch.Tensor, absolute_grid: torch.Tensor, mode: str = "bilinear", align_corners: Optional[bool] = None):
     """Same as torch's grid_sample, with absolute pixel coordinates instead of normalized coordinates."""
@@ -29,168 +30,7 @@ def make_coords_grid(batch_size: int, h: int, w: int, device: str = "cpu"):
     coords = torch.stack(coords[::-1], dim=0).float()  # (2, H, W)
     return coords[None].repeat(batch_size, 1, 1, 1)  # (B, 2, H, W)
 
-def upsample_flow(flow, up_mask: Optional[torch.Tensor] = None, factor: int = 8):
-    """Upsample flow by the input factor (default 8).
 
-    If up_mask is None we just interpolate.
-    If up_mask is specified, we upsample using a convex combination of its weights. See paper page 8 and appendix B.
-    Note that in appendix B the picture assumes a downsample factor of 4 instead of 8.
-    """
-    batch_size, num_channels, h, w = flow.shape
-    new_h, new_w = h * factor, w * factor
-
-    if up_mask is None:
-        return factor * F.interpolate(flow, size=(new_h, new_w), mode="bilinear", align_corners=True)
-
-    up_mask = up_mask.view(batch_size, 1, 9, factor, factor, h, w)
-    up_mask = torch.softmax(up_mask, dim=2)  # "convex" == weights sum to 1
-
-    upsampled_flow = F.unfold(factor * flow, kernel_size=3, padding=1).view(batch_size, num_channels, 9, 1, 1, h, w)
-    upsampled_flow = torch.sum(up_mask * upsampled_flow, dim=2)
-
-    return upsampled_flow.permute(0, 1, 4, 2, 5, 3).reshape(batch_size, num_channels, new_h, new_w)
-
-class BottleneckBlock(nn.Module):
-    """Slightly modified BottleNeck block (extra relu and biases)"""
-
-    def __init__(self, in_channels, out_channels, *, norm_layer, stride=1):
-        super().__init__()
-
-        # See note in ResidualBlock for the reason behind bias=True
-        self.convnormrelu1 = Conv2dNormActivation(
-            in_channels, out_channels // 4, norm_layer=norm_layer, kernel_size=1, bias=True
-        )
-        self.convnormrelu2 = Conv2dNormActivation(
-            out_channels // 4, out_channels // 4, norm_layer=norm_layer, kernel_size=3, stride=stride, bias=True
-        )
-        self.convnormrelu3 = Conv2dNormActivation(
-            out_channels // 4, out_channels, norm_layer=norm_layer, kernel_size=1, bias=True
-        )
-        self.relu = nn.ReLU(inplace=True)
-
-        if stride == 1:
-            self.downsample = nn.Identity()
-        else:
-            self.downsample = Conv2dNormActivation(
-                in_channels,
-                out_channels,
-                norm_layer=norm_layer,
-                kernel_size=1,
-                stride=stride,
-                bias=True,
-                activation_layer=None,
-            )
-
-    def forward(self, x):
-        y = x
-        y = self.convnormrelu1(y)
-        y = self.convnormrelu2(y)
-        y = self.convnormrelu3(y)
-
-        x = self.downsample(x)
-
-        return self.relu(x + y)
-
-
-class ResidualBlock(nn.Module):
-    """Slightly modified Residual block with extra relu and biases."""
-
-    def __init__(self, in_channels, out_channels, *, norm_layer, stride=1, always_project: bool = False):
-        super().__init__()
-
-        # Note regarding bias=True:
-        # Usually we can pass bias=False in conv layers followed by a norm layer.
-        # But in the RAFT training reference, the BatchNorm2d layers are only activated for the first dataset,
-        # and frozen for the rest of the training process (i.e. set as eval()). The bias term is thus still useful
-        # for the rest of the datasets. Technically, we could remove the bias for other norm layers like Instance norm
-        # because these aren't frozen, but we don't bother (also, we woudn't be able to load the original weights).
-        self.convnormrelu1 = Conv2dNormActivation(
-            in_channels, out_channels, norm_layer=norm_layer, kernel_size=3, stride=stride, bias=True
-        )
-        self.convnormrelu2 = Conv2dNormActivation(
-            out_channels, out_channels, norm_layer=norm_layer, kernel_size=3, bias=True
-        )
-
-        # make mypy happy
-        self.downsample: nn.Module
-
-        if stride == 1 and not always_project:
-            self.downsample = nn.Identity()
-        else:
-            self.downsample = Conv2dNormActivation(
-                in_channels,
-                out_channels,
-                norm_layer=norm_layer,
-                kernel_size=1,
-                stride=stride,
-                bias=True,
-                activation_layer=None,
-            )
-
-        self.relu = nn.ReLU(inplace=True)
-
-    def forward(self, x):
-        y = x
-        y = self.convnormrelu1(y)
-        y = self.convnormrelu2(y)
-
-        x = self.downsample(x)
-
-        return self.relu(x + y)
-    
-class FeatureEncoder(nn.Module):
-    """The feature encoder, used both as the actual feature encoder, and as the context encoder.
-
-    It must downsample its input by 8.
-    """
-
-    def __init__(
-        self, *, block=ResidualBlock, in_chan=3, layers=(64, 64, 96, 128, 256), strides=(2, 1, 2, 2), norm_layer=nn.BatchNorm2d
-    ):
-        super().__init__()
-
-        if len(layers) != 5:
-            raise ValueError(f"The expected number of layers is 5, instead got {len(layers)}")
-
-        # See note in ResidualBlock for the reason behind bias=True
-        self.convnormrelu = Conv2dNormActivation(
-            in_chan, layers[0], norm_layer=norm_layer, kernel_size=7, stride=strides[0], bias=True
-        )
-
-        self.layer1 = self._make_2_blocks(block, layers[0], layers[1], norm_layer=norm_layer, first_stride=strides[1])
-        self.layer2 = self._make_2_blocks(block, layers[1], layers[2], norm_layer=norm_layer, first_stride=strides[2])
-        self.layer3 = self._make_2_blocks(block, layers[2], layers[3], norm_layer=norm_layer, first_stride=strides[3])
-
-        self.conv = nn.Conv2d(layers[3], layers[4], kernel_size=1)
-
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-            elif isinstance(m, (nn.BatchNorm2d, nn.InstanceNorm2d)):
-                if m.weight is not None:
-                    nn.init.constant_(m.weight, 1)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-
-        num_downsamples = len(list(filter(lambda s: s == 2, strides)))
-        self.output_dim = layers[-1]
-        self.downsample_factor = 2**num_downsamples
-
-    def _make_2_blocks(self, block, in_channels, out_channels, norm_layer, first_stride):
-        block1 = block(in_channels, out_channels, norm_layer=norm_layer, stride=first_stride)
-        block2 = block(out_channels, out_channels, norm_layer=norm_layer, stride=1)
-        return nn.Sequential(block1, block2)
-
-    def forward(self, x):
-        x = self.convnormrelu(x)
-
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-
-        x = self.conv(x)
-
-        return x
 
 
     
@@ -386,14 +226,11 @@ class FlowHead(nn.Module):
 
     def __init__(self, *, in_channels:int, hidden_size:int, pooling_size:Tuple[int,int]):
         super().__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, hidden_size, 3, padding=1),
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.Conv2d(hidden_size, hidden_size, 3, padding=1)
-        )
         self.pooling = nn.AdaptiveAvgPool2d(pooling_size)
-        self.flatten = nn.Flatten(start_dim=1)
-        inplanes = hidden_size * pooling_size[0] * pooling_size[1] + 6  # add last delta_x
+        inplanes = hidden_size * pooling_size[0] * pooling_size[1]
+        self.conv1 = nn.Conv2d(in_channels, hidden_size, 3, padding=1)
+        self.conv2 = nn.Conv2d(hidden_size, 2, 3, padding=1)
+        self.relu = nn.ReLU(inplace=True)
         self.mlp = MLPNet(head_dims=[inplanes, 256], sub_dims=[256, 3], activation_func=nn.LeakyReLU(0.1, inplace=True))
         self.pcd = None
         self.camera_info = None
@@ -408,14 +245,13 @@ class FlowHead(nn.Module):
             self.camera_info = camera_info
             self.uv0 = project_pc2image(pcd, self.camera_info)  # (B, 2, N)
 
-    def forward(self, hidden_state:torch.Tensor, last_x:torch.Tensor):
+    def forward(self, hidden_state:torch.Tensor, Tcl:torch.Tensor):
         if self.pcd is None or self.uv0 is None:
             raise ValueError("must call initialize() before forward.")
-        x = self.conv(hidden_state)
-        x = self.pooling(x)
-        x = self.flatten(x)  # (B, C, H, W) -> (B, C*H*W)
-        x = self.mlp(torch.cat([x, last_x], dim=1))  # predict delta_x
-        pcd_tf = se3.transform(se3.exp(x), self.pcd)
+        x = self.relu(self.conv1(hidden_state))
+        x = torch.flatten(self.pooling(x), start_dim=1)  # (B, C, H, W) -> (B, C*H*W)
+        x = self.mlp(x)  # predict delta_x
+        pcd_tf = se3.transform(se3.exp(x) @ Tcl, self.pcd)
         uv = project_pc2image(pcd_tf, self.camera_info)  # (B, 2, N)
         sparse_flow2d = uv - self.uv0
         return x, sparse_flow2d, self.uv0
@@ -437,11 +273,11 @@ class UpdateBlock(nn.Module):
         self.camera_info = None
 
 
-    def forward(self, hidden_state, last_x, context, corr_features, flow, confidence_map) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, hidden_state, context, corr_features, flow, confidence_map, Tcl) -> Tuple[torch.Tensor, torch.Tensor]:
         motion_features = self.motion_encoder(flow, corr_features, confidence_map)
         x = torch.cat([context, motion_features], dim=1)
         hidden_state = self.recurrent_block(hidden_state, x)
-        x, sparse_flow, uv = self.flow_head(hidden_state, last_x)
+        x, sparse_flow, uv = self.flow_head(hidden_state, Tcl)
         return hidden_state, x, sparse_flow, uv
     
 
@@ -470,7 +306,7 @@ class LCCRAFT(nn.Module):
         depth_gen_pooling_size:int=1,
         depth_gen_max_depth:float=50.0,
         feat_poooling_size:Tuple[int,int]=[2,4],
-        fps_num:int=1024,
+        fps_num:int=512,
         loss_gamma:float=0.8):
         """
         `LCCRAFT: LCCRAFT: LiDAR and Camera Calibration Using Recurrent All-Pairs Field Transforms Without Precise Initial Guess`_.
@@ -543,7 +379,7 @@ class LCCRAFT(nn.Module):
     def clear_buffer(self):
         self.buffer.clear()
 
-    def forward(self, img:torch.Tensor, pcd_tf:torch.Tensor, camera_info:Dict, num_flow_updates: int = 5):
+    def forward(self, img:torch.Tensor, pcd_tf:torch.Tensor, camera_info:Dict, num_flow_updates: int = 12):
         batch_size, _, h, w = img.shape
         if not (h % 8 == 0) and (w % 8 == 0):
             raise ValueError(f"input image H and W should be divisible by 8, insted got {h} (h) and {w} (w)")
@@ -592,16 +428,15 @@ class LCCRAFT(nn.Module):
         context = F.relu(context)
         coords0 = make_coords_grid(batch_size, h // 8, w // 8).to(img_fmap.device)  # (B, 2, H, W)
         coords1 = torch.clone(coords0)  # (B, 2, H, W)
-        last_x = torch.zeros([batch_size, 6]).to(context)
-        x_preds = []
+        Tcl = torch.eye(4)[None].repeat(batch_size, 1, 1).to(pcd_tf)
+        Tcl_predictions = [Tcl]
         dense_flow = torch.zeros_like(coords0)  # (B, 2, H, W)
         for _ in range(num_flow_updates):
             corr_features = self.corr_block.index_pyramid(centroids_coords=(dense_flow + coords0).detach())
-            hidden_state, x, sprase_flow, uv = self.update_block(hidden_state, last_x, context, corr_features, dense_flow, confidence_map)
+            hidden_state, x, sprase_flow, uv = self.update_block(hidden_state, context, corr_features, dense_flow, confidence_map, Tcl_predictions[-1])
             dense_flow = knn_interpolation(uv, sprase_flow, torch.flatten(coords1, start_dim=-2), k=3).reshape(batch_size, 2, feat_h, feat_w)
-            last_x = x.clone().detach()
-            x_preds.append(x)
-        return x_preds
+            Tcl_predictions.append(se3.exp(x) @ Tcl_predictions[-1])
+        return Tcl_predictions[1:]
     
     @staticmethod
     def sequence_loss(x_preds:List[torch.Tensor], x_gt:torch.Tensor, loss_fn:Callable, gamma:float):

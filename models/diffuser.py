@@ -177,7 +177,7 @@ class Diffuser(BaseNetwork):
 
 	def set_loss(self, loss_fn):
 		if self.seq_loss:
-			self.loss_fn = self.x0_fn.loss(loss_fn, 0.8)
+			self.loss_fn = self.x0_fn.loss(loss_fn)
 		else:
 			self.loss_fn = loss_fn
 
@@ -482,9 +482,8 @@ class SE3Diffuser:
 		for t in range(self.val_scheduler_argv['n_diff_steps']+1, 1, -1):  # [T, T-1, ..., 1]
 			pred_x = self.model(img, pcd, H_t @ Tcl, camera_info)
 			if not isinstance(pred_x, torch.Tensor):
-				delta_H_t = pred_x[-1]
-			else:
-				delta_H_t = se3.exp(pred_x)  # (B, 4, 4) H_t_to_0
+				pred_x = pred_x[-1]
+			delta_H_t = se3.exp(pred_x)  # (B, 4, 4) H_t_to_0
 			H_0 = delta_H_t @ H_t
 			gamma0 = self.val_scheduler.gamma0[t]
 			gamma1 = self.val_scheduler.gamma1[t]

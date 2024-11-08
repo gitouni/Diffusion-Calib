@@ -1,0 +1,16 @@
+stages:
+  - max_deg: 15
+    max_tran: 0.15
+    mag_randomly: true
+  - max_deg: 10
+    max_tran: 0.1
+    mag_randomly: true
+  - max_deg: 5
+    max_tran: 0.05
+    mag_randomly: true
+  - max_deg: 3
+    max_tran: 0.03
+    mag_randomly: true
+  - max_deg: 1
+    max_tran: 0.01
+    mag_randomly: true

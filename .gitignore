@@ -34,3 +34,4 @@ test_custom.py
 test_scn.py
 tmp_table.txt
 train_se3diff.py
+tmp/

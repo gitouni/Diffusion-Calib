@@ -18,7 +18,7 @@ from core.tools import load_checkpoint_model_only
 import logging
 from pathlib import Path
 from typing import Dict, Literal, Iterable
-import time
+from core.tools import Timer
 
 
 def get_dataloader(test_dataset_argv:Iterable[Dict], test_dataloader_argv:Dict, dataset_type:str):
@@ -55,9 +55,9 @@ def test_diffuser(test_loader:DataLoader, name:str, diffuser:Diffuser, logger:lo
             batch_n = len(gt_se3)
             gt_x = se3.log(gt_se3)
             camera_info = batch['camera_info']
-            t0 = time.time()
-            x0_hat, x0_list = diffuser.sample_fn(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info), return_intermediate=True)
-            dt = time.time() - t0
+            with Timer() as timer:
+                x0_hat, x0_list = diffuser.sample_fn(torch.zeros_like(gt_x), (img, pcd, init_extran, camera_info), return_intermediate=True)
+            dt = timer.elapsed_time
             tracker.update('time', dt, batch_n)
             x0_list = [to_npy(se3.log(se3.exp(x0) @ init_extran)) for x0 in x0_list]
             batched_x0_list = np.stack(x0_list, axis=1)  # (B, K, 6)
@@ -155,16 +155,15 @@ def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:log
             H0 = torch.eye(4).unsqueeze(0).to(gt_se3)
             model.restore_buffer(img, pcd)
             x0_list = []
-            t0 = time.time()
-            for _ in range(iters):
-                delta_x = model.forward(img, pcd, H0 @ init_extran, camera_info)
-                if not isinstance(delta_x, torch.Tensor):
-                    H0 = delta_x[-1] @ H0
-                else:
+            with Timer() as timer:
+                for _ in range(iters):
+                    delta_x = model.forward(img, pcd, H0 @ init_extran, camera_info)
+                    if not isinstance(delta_x, torch.Tensor):
+                        delta_x = delta_x[-1]
                     H0 = se3.exp(delta_x) @ H0
-                save_x = to_npy(se3.log(H0 @ init_extran))  # (6,)
-                x0_list.append(save_x)
-            dt = time.time() - t0
+                    save_x = to_npy(se3.log(H0 @ init_extran))  # (6,)
+                    x0_list.append(save_x)
+            dt = timer.elapsed_time
             tracker.update('time', dt, batch_n)
             batched_x0_list = np.stack(x0_list, axis=1)  # (B, K, 6)
             for x0 in batched_x0_list:
@@ -242,7 +241,7 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
-    logger.info('start traing')
+    logger.info('start testing')
     logger.info('args:')
     logger.info(args)
     if path_argv['pretrain'] is not None:
@@ -250,12 +249,11 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
         logger.info("Loaded checkpoint from {}".format(path_argv['pretrain']))
     else:
         raise FileNotFoundError("'pretrain' cannot be set to 'None' during test-time")
-    summary(surrogate_model)  # print the volume of model parameters
+    # summary(surrogate_model)  # print the volume of model parameters
     # exit(0)
     # testing
     record_list = []
     for name, dataloader in zip(name_list, dataloader_list):
-        surrogate_model.train()
         sub_res_dir = res_dir.joinpath(name)
         sub_res_dir.mkdir()
         if model_type == 'diffusion' :

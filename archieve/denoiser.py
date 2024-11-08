@@ -13,10 +13,12 @@ from .tools.core import DepthImgGenerator, BasicBlock, MLPNet
 from .tools.utils import timer
 from functools import partial
 
+
 class Surrogate(nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
+    @timer.timer_func
     @abstractmethod
     def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict, *args):
         pass
@@ -107,7 +109,7 @@ class LCCRAFT(Surrogate):
         # pcd_norm = torch.linalg.norm(pcd, dim=1)  # (B, N)
         pcd_tf = se3.transform(Tcl, pcd)
         x0 = self.encoder(img, pcd_tf, camera_info, self.num_iters) # (B, D)
-        return x0  # List of (B, 4, 4)
+        return x0  # List of (B, x_dim)
     
     def restore_buffer(self, img:torch.Tensor, pcd:torch.Tensor):
         self.encoder.restore_buffer(img)
@@ -115,20 +117,11 @@ class LCCRAFT(Surrogate):
     def clear_buffer(self):
         self.encoder.clear_buffer()
 
-    def sequence_loss(self, pred_list:List[torch.Tensor], gt:torch.Tensor, loss_fn:Callable):
+    def sequence_loss(self, se3_pred_list:List[torch.Tensor], se3_gt:torch.Tensor, geometric_loss_fn:Callable):
         loss = 0
         gamma_prod = 1.0
-        for pred_x in reversed(pred_list):  # the final output is expected to be the cloest to the GT
-            iter_loss = loss_fn(pred_x, gt)
-            loss += iter_loss * gamma_prod
-            gamma_prod *= self.encoder.loss_gamma
-        return loss
-    
-    def sequence_geo_loss(self, pred_se3_list:List[torch.Tensor], gt_se3:torch.Tensor, geometric_loss:Callable):
-        loss = 0
-        gamma_prod = 1.0
-        for pred_se3 in reversed(pred_se3_list):  # the final output is expected to be the cloest to the GT
-            R_loss, t_loss = geometric_loss(pred_se3, gt_se3)
+        for se3_pred in se3_pred_list:
+            R_loss, t_loss = geometric_loss_fn(se3_pred, se3_gt)
             loss += (R_loss + t_loss) * 0.5 * gamma_prod
             gamma_prod *= self.encoder.loss_gamma
         return loss
@@ -330,12 +323,12 @@ class RAFTDenoiser(nn.Module):
         img, pcd, Tcl, camera_info = x_cond
         se3_x_t = se3.exp(x_t)
         Tcl = se3_x_t @ Tcl
-        x0_list = self.model(img, pcd, Tcl, camera_info)
-        x0_list = [se3.log(se3.exp(x0) @ se3_x_t) for x0 in x0_list]  # sequentially transformed by se3_x_t and x0
+        pred_se3_list = self.model(img, pcd, Tcl, camera_info)
+        x0_list = [se3.log(se3_x @ se3_x_t) for se3_x in pred_se3_list]  # sequentially transformed by se3_x_t and x0
         return x0_list
     
-    def loss(self, loss_fn:Callable):
-        return partial(self.model.sequence_loss, loss_fn=loss_fn)
+    def loss(self, loss_fn:Callable, gamma:float):
+        return partial(self.model.encoder.sequence_loss, loss_fn=loss_fn, gamma=gamma)
 
 # class ProbNet(nn.Module):
 #     def __init__(self, hidden_dims:Sequence[int], encoder_argv:Dict, pretrained_encoder:Optional[OrderedDict]=None, freeze_encoder:bool=False):

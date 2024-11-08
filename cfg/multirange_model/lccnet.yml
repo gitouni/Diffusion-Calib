@@ -11,6 +11,8 @@ path:
     - experiments/multirange/lccnet/checkpoint/best_stage_0.pth
     - experiments/multirange/lccnet/checkpoint/best_stage_1.pth
     - experiments/multirange/lccnet/checkpoint/best_stage_2.pth
+    - experiments/multirange/lccnet/checkpoint/best_stage_3.pth
+    - experiments/multirange/lccnet/checkpoint/best_stage_4.pth
   
 model:
   surrogate:
