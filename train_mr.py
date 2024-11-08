@@ -59,8 +59,8 @@ def val_epoch(val_loader:DataLoader, surrogate:Surrogate, logger:logging.Logger,
             camera_info = batch['camera_info']
             delta_x = surrogate.forward(img, pcd, init_extran, camera_info)
             if isinstance(surrogate, LCCRAFT):
+                loss = loss_fn(se3.log(delta_x[-1]), gt_log)
                 R_loss, t_loss = geodesic_loss(delta_x[-1], gt_se3)
-                loss = (R_loss + t_loss) / 2
             else:
                 pred_se3 = se3.exp(delta_x)
                 R_loss, t_loss = geodesic_loss(pred_se3, gt_se3)
@@ -151,13 +151,14 @@ def main(config:Dict, config_path:Union[str, Iterable[str]], stage:int):
                 optimizer.zero_grad()
                 delta_x = surrogate.forward(img, pcd, init_extran, camera_info)
                 if isinstance(surrogate, LCCRAFT):
-                    loss = surrogate.sequence_loss(delta_x, gt_se3, geodesic_loss)
+                    loss = surrogate.sequence_loss(delta_x, gt_delta_x, loss_func)
                 else:
                     loss = loss_func(delta_x, gt_delta_x)
                 # R_loss, t_loss = geodesic_loss(se3.exp(x0_hat), gt_se3)
                 # loss = R_loss + t_loss
+                # before = surrogate.encoder.img_feature_encoder.layer1[0].convnormrelu1[0].weight.mean()
                 if torch.isnan(loss).sum() > 0:
-                    logger.warning("nan detected, end training.")
+                    logger.warning("nan detected in loss, end training.")
                     iterator.set_postfix(state='nan')
                     iterator.update(1)
                     optimizer.zero_grad()
@@ -167,11 +168,26 @@ def main(config:Dict, config_path:Union[str, Iterable[str]], stage:int):
                         ELBO = surrogate.loss(img, surrogate.depth_img)
                     loss = loss + ELBO
                 loss.backward()
-                nn.utils.clip_grad_norm_(surrogate.parameters(), max_norm=clip_grad, norm_type=2)  # avoid gradient explosion
-                optimizer.step()
+                try:
+                    nn.utils.clip_grad_norm_(surrogate.parameters(), clip_grad, norm_type=2, error_if_nonfinite=True)  # avoid gradient explosion
+                    optimizer.step()
+                except:
+                    logger.warning("nan detected in grad, skip batch.")
+                    iterator.update(1)
+                    # torch.save(dict(model=surrogate.state_dict(),
+                    #     optimizer=optimizer.state_dict(),
+                    #     img=img,
+                    #     pcd=pcd,
+                    #     init_extran=init_extran,
+                    #     camera_info=camera_info),
+                    #     str(checkpoints_dir.joinpath('debug_stage_{}.pth'.format(stage))))
+                    optimizer.zero_grad()
+                    continue
+                                # after = surrogate.encoder.img_feature_encoder.layer1[0].convnormrelu1[0].weight.mean()
+                # print("before:{}, after:{}".format(before, after))
                 with torch.inference_mode():
                     if isinstance(surrogate, LCCRAFT):
-                        pred_se3 = delta_x[-1]
+                        pred_se3 = se3.exp(delta_x[-1]) # already SE(3)
                     else:
                         pred_se3 = se3.exp(delta_x)
                     R_loss, t_loss = geodesic_loss(pred_se3, gt_se3)
@@ -197,8 +213,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_config', type=str, default="cfg/dataset/kitti_large.yml")
     parser.add_argument("--model_config",type=str, default="cfg/multirange_model/lccraft_small.yml")
-    parser.add_argument("--multirange_config",type=str, default="cfg/dataset/multirange.yml")
-    parser.add_argument("--stage",type=int,default=2)
+    parser.add_argument("--multirange_config",type=str, default="cfg/dataset/mr_5.yml")
+    parser.add_argument("--stage",type=int,default=5)
     args = parser.parse_args()
     dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
     multirange_config = yaml.load(open(args.multirange_config, 'r'), yaml.SafeLoader)
