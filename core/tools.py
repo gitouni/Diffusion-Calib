@@ -6,6 +6,29 @@ import torch.nn as nn
 from torchvision.utils import make_grid
 from typing import Iterable, List, Tuple, Union
 from models.util.constant import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+import time
+class CudaTimer:
+    def __init__(self):
+        self.start_event = torch.cuda.Event(enable_timing=True)
+        self.end_event = torch.cuda.Event(enable_timing=True)
+
+    def __enter__(self):
+        self.start_event.record()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.end_event.record()
+        torch.cuda.synchronize()
+        self.elapsed_time = self.start_event.elapsed_time(self.end_event) / 1000 # ms -> s
+
+class Timer:
+    def __enter__(self):
+        self.start_time = time.time()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        torch.cuda.synchronize()
+        self.elapsed_time = time.time() - self.start_time
 
 def patchidx(target_size:Iterable[int], patch_size:Iterable[int], overlap:Iterable[int]):
 	Hindex = list(range(0, target_size[0] - overlap[0], patch_size[0] - overlap[0]))
