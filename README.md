@@ -35,7 +35,7 @@ cd ..
 ```
 # Train
 * You can download our [pretrained models](https://github.com/gitouni/SurrogateCalib/releases/download/1.0/LSD_chkpt.zip) trained on KITTI Odometry Dataset or train them following the instructions.
-* Train a surrogate model (dataset config + model config)
+* Train a surrogate model (dataset_config + model_config)
 ```bash
 python train.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/unipc_model/main.yml
 ```
@@ -44,6 +44,11 @@ Change `main.yml` to other configs in `cfg/unipc_model` to train baselines, and 
 ```bash
 python train_vae.py --dataset_config cfg/dataset/kitti_vae_large.yml --model_config cfg/model/vae.yml
 ```
+* Train a multi-range model (dataset_config + model_config + multirange_config + stage)
+```bash
+python train_mr.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/unipc_model/main.yml --multirange_config cfg/dataset/mr_5.yml --stage 0
+```
+Note that a complete multirange model requires all stages of training. See [bash_train_mr.py](./bash_train_mr.py) as an example for automatic running.
 # Test
 * one-step mode
 ```bash
