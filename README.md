@@ -67,4 +67,4 @@ python test.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/u
 python test_se3_diff.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/unipc_model/main_sd.yml --model_type se3_diffusion
 ```
 # Acknowledgements
-Thanks authors of [CamLiFLow](https://github.com/MCG-NJU/CamLiFlow), [DPM-Solver](https://github.com/LuChengTHU/dpm-solver), [UniPC](https://github.com/wl-zhao/UniPC) and [Palette](https://github.com/Janspiry/Palette-Image-to-Image-Diffusion-Models)
+Thanks authors of [CamLiFLow](https://github.com/MCG-NJU/CamLiFlow), [DPM-Solver](https://github.com/LuChengTHU/dpm-solver), [UniPC](https://github.com/wl-zhao/UniPC), [SE3-Diffusion](https://github.com/Jiang-HB/DiffusionReg) and [Palette](https://github.com/Janspiry/Palette-Image-to-Image-Diffusion-Models)
