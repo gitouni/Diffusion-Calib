@@ -5,7 +5,7 @@ if __name__ == "__main__":
     pred_dir_fmt = "experiments/large/{method}/kitti/results/{filefolder}"
     gt_dir = "cache/kitti_gt"
     log_file_fmt = "log/large/{savefile}.json"
-    method_list = ['lccraft_small','lccraft_large']
+    method_list = ['calibnet','rggnet','lccnet','lccraft_small','lccraft_large','main']
     iterative_list = ['iterative_1','iterative_10','unipc_10','se3_diffusion_10']
     suffix_list = ['','_iter','_unipc','_sd']
     for method in method_list:

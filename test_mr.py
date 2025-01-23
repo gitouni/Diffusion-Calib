@@ -161,7 +161,7 @@ def main(config:Dict, config_path:str):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_config', type=str, default="cfg/dataset/kitti_large.yml")
-    parser.add_argument("--model_config",type=str, default="cfg/multirange_model/lccraft_large.yml")
+    parser.add_argument("--model_config",type=str, default="cfg/multirange_model/lccraft_small.yml")
     parser.add_argument("--multirange_config",type=str, default="cfg/dataset/mr_5.yml")
     args = parser.parse_args()
     dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)

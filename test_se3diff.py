@@ -151,7 +151,7 @@ def main(config:Dict, config_path:str, model_type:str):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_config', default="cfg/dataset/kitti_large.yml", type=str)
-    parser.add_argument("--model_config",type=str,default="cfg/unipc_sd_model/lccraft_sd.yml")
+    parser.add_argument("--model_config",type=str,default="cfg/unipc_sd_model/rggnet_sd.yml")
     parser.add_argument('--model_type',type=str, default='se3_diffusion')
     args = parser.parse_args()
     dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)

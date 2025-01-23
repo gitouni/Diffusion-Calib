@@ -13,6 +13,9 @@ parser.add_argument("--first_suffix",type=str,nargs="+",default=[r'~\cite{CalibN
 parser.add_argument("--key_order",type=str,nargs="+",default=['Rx','Ry','Rz','R','tx','ty','tz','t','3d3c','5d5c'])
 parser.add_argument("--save_table",type=str,default="tmp_table.txt")
 args = parser.parse_args()
+first_format = r"\textbf{}"
+second_format = r"\underline{}"
+first_iterative_format = r'{}^$\dagger$'
 with open(args.save_table,'w') as f:
     for i, (suffix, name_suffix) in enumerate(zip(args.suffix_list, args.name_suffix_list)):
         for j, (method, method_name) in enumerate(zip(args.method_list, args.name_method_list)):

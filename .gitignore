@@ -3,10 +3,15 @@
 *.pth
 *.pyc
 *.txt
+cfg/*.yml
+cfg/model
+cfg/sd_model
 log/
 fig/
 RANSAC/
 debug_cfg/
+debug/
+tmp/
 core/__pycache__
 data/
 models/__pycache__/
@@ -21,6 +26,8 @@ models/lccnet/correlation_package/build/
 models/lccnet/correlation_package/dist/
 models/lccnet/correlation_package/correlation_cuda.egg-info/
 experiments
+archieve/
+.vscode/
 # experiments/debug
 # experiments/large_ckpt
 # experiments/regular
@@ -34,4 +41,12 @@ test_custom.py
 test_scn.py
 tmp_table.txt
 train_se3diff.py
+train_surrogate.py
 tmp/
+cal_time.py
+debug_dataset.py
+debug_model.py
+save_feat.py
+test_custom.py
+extract_gt.py
+view*.py
