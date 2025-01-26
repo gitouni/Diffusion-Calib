@@ -12,16 +12,13 @@ RANSAC/
 debug_cfg/
 debug/
 tmp/
-core/__pycache__
-data/
-models/__pycache__/
+**/__pycache__/
+data/*
 models/tools/__pycache__/
 models/tools/csrc/__pycache__/
 models/tools/csrc/build/
 models/tools/csrc/csrc.egg-info/
 models/tools/csrc/*.so
-models/*/__pycache__/
-models/lccnet/correlation_package/__pycache__/
 models/lccnet/correlation_package/build/
 models/lccnet/correlation_package/dist/
 models/lccnet/correlation_package/correlation_cuda.egg-info/
@@ -32,8 +29,7 @@ archieve/
 # experiments/large_ckpt
 # experiments/regular
 # experiments/surrogate
-*/build/
-*/__pycache__/
+**/build/
 metrics_cmp.py
 local_opt.py
 sploss.py

@@ -18,9 +18,9 @@ def se3_err(pred_se3:np.ndarray, gt_se3:np.ndarray) -> Tuple[np.ndarray,np.ndarr
 
 def options():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pred_dir_root",type=str,default="experiments/multirange/main/kitti/results/iterative_1")
-    parser.add_argument("--gt_dir",type=str,default="cache/kitti_gt")
-    parser.add_argument("--log_file",type=str,default="log/multirange/main.json")
+    parser.add_argument("--pred_dir_root",type=str,default="experiments/nuscenes/lsd/main/results/unipc_10_2025-01-26-10-36-04")
+    parser.add_argument("--gt_dir",type=str,default="cache/nuscenes_gt")
+    parser.add_argument("--log_file",type=str,default="log/nuscenes/main_lsd.json")
     return parser.parse_args()
 
 if __name__ == "__main__":

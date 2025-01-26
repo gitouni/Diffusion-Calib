@@ -6,8 +6,8 @@ import torch
 import torch.nn as nn
 import torch.utils
 from torch.utils.data import DataLoader
-from dataset import BaseKITTIDataset, PerturbDataset, KITTIBatchSampler
-from models.denoiser import Surrogate, RGGNet, LCCRAFT, __classdict__ as DenoiserDict
+from models.denoiser import RGGNet, LCCRAFT, __classdict__ as DenoiserDict, SURROGATE_TYPE
+from dataset import PerturbDataset, SeqBatchSampler, __classdict__ as DatasetDict, DATASET_TYPE
 from models.lr_scheduler import get_lr_scheduler
 from models.loss import get_loss, geodesic_loss
 from tqdm import tqdm
@@ -22,17 +22,16 @@ from typing import Dict, Union, Iterable, Callable
 # torch.backends.cudnn.benchmark = False
 # torch.backends.cudnn.deterministic = True
 
-def get_dataloader(train_base_dataset_argv:Dict, train_dataset_argv:Dict,
+def get_dataloader(dataset_type:str, train_base_dataset_argv:Dict, train_dataset_argv:Dict,
         val_base_dataset_argv:Dict, val_dataset_argv:Dict,
-        train_dataloader_argv:Dict, val_dataloader_argv:Dict, range_argv:Dict):
-    train_base_dataset = BaseKITTIDataset(**train_base_dataset_argv)
-    val_base_dataset = BaseKITTIDataset(**val_base_dataset_argv)
-    train_dataset_argv.update(range_argv)  # update dataset perturbation with model settings
-    val_dataset_argv.update(range_argv)  # update dataset perturbation with model settings
+        train_dataloader_argv:Dict, val_dataloader_argv:Dict):
+    dataset_class = DatasetDict[dataset_type]
+    train_base_dataset:DATASET_TYPE = dataset_class(**train_base_dataset_argv)
+    val_base_dataset:DATASET_TYPE = dataset_class(**val_base_dataset_argv)
     train_dataset = PerturbDataset(train_base_dataset, **train_dataset_argv)
     val_dataset = PerturbDataset(val_base_dataset, **val_dataset_argv)
-    train_dataloader_argv['batch_sampler'] = KITTIBatchSampler(len(train_base_dataset.kitti_datalist), train_base_dataset.sep, **train_dataloader_argv['batch_sampler'])
-    val_dataloader_argv['batch_sampler'] = KITTIBatchSampler(len(val_base_dataset.kitti_datalist), val_base_dataset.sep, **val_dataloader_argv['batch_sampler'])
+    train_dataloader_argv['batch_sampler'] = SeqBatchSampler(*train_base_dataset.get_seq_params(), **train_dataloader_argv['batch_sampler'])
+    val_dataloader_argv['batch_sampler'] = SeqBatchSampler(*val_base_dataset.get_seq_params(),  **val_dataloader_argv['batch_sampler'])
     if hasattr(train_dataset, 'collate_fn'):
         train_dataloader_argv['collate_fn'] = getattr(train_dataset, 'collate_fn')
     if hasattr(val_dataset, 'collate_fn'):
@@ -42,7 +41,7 @@ def get_dataloader(train_base_dataset_argv:Dict, train_dataset_argv:Dict,
     return train_dataloader, val_dataloader
 
 @torch.inference_mode()
-def val_epoch(val_loader:DataLoader, surrogate:Surrogate, logger:logging.Logger, device:torch.Tensor, log_per_iter:int, loss_fn:Callable):
+def val_epoch(val_loader:DataLoader, surrogate:SURROGATE_TYPE, logger:logging.Logger, device:torch.Tensor, log_per_iter:int, loss_fn:Callable):
     surrogate.eval()
     total_loss = 0
     logger.info("Validation:")
@@ -57,7 +56,7 @@ def val_epoch(val_loader:DataLoader, surrogate:Surrogate, logger:logging.Logger,
             gt_se3 = batch['gt'].to(device)  # transform uncalibrated_pcd to calibrated_pcd
             gt_log = se3.log(gt_se3)
             camera_info = batch['camera_info']
-            delta_x = surrogate.forward(img, pcd, init_extran, camera_info)
+            delta_x = surrogate(img, pcd, init_extran, camera_info)
             if isinstance(surrogate, LCCRAFT):
                 loss = loss_fn(se3.log(delta_x[-1]), gt_log)
                 R_loss, t_loss = geodesic_loss(delta_x[-1], gt_se3)
@@ -89,7 +88,7 @@ def main(config:Dict, config_path:Union[str, Iterable[str]], stage:int):
     device = config['device']
     # torch.backends.cudnn.benchmark=True
     # torch.backends.cudnn.enabled = False
-    surrogate:Surrogate = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
+    surrogate:SURROGATE_TYPE = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
     range_argv = config['stages'][stage]
     dataset_argv = config['dataset']['train']
     train_dataloader, val_dataloader = get_dataloader(dataset_argv['dataset']['train']['base'], dataset_argv['dataset']['train']['main'],
@@ -149,7 +148,7 @@ def main(config:Dict, config_path:Union[str, Iterable[str]], stage:int):
                 camera_info = batch['camera_info']
                 gt_delta_x = se3.log(gt_se3)  # (B, 6)
                 optimizer.zero_grad()
-                delta_x = surrogate.forward(img, pcd, init_extran, camera_info)
+                delta_x = surrogate(img, pcd, init_extran, camera_info)
                 if isinstance(surrogate, LCCRAFT):
                     loss = surrogate.sequence_loss(delta_x, gt_delta_x, loss_func)
                 else:

@@ -6,33 +6,44 @@ from torchinfo import summary
 import torch
 from torch.utils.data import DataLoader
 from dataset import PerturbDataset
-from dataset import __classdict__ as DatasetDict
+from dataset import __classdict__ as DatasetDict, DATASET_TYPE
 from models.denoiser import Denoiser, RAFTDenoiser, Surrogate, __classdict__ as DenoiserDict
 from models.diffuser import Diffuser
 from models.loss import se3_err, get_loss
 from tqdm import tqdm
 import yaml
 from models.util import se3
-from core.logger import LogTracker
+from core.logger import LogTracker, fmt_time
 from core.tools import load_checkpoint_model_only
 import logging
 from pathlib import Path
-from typing import Dict, Literal, Iterable
+from typing import Dict, Literal, Union, List
 from core.tools import Timer
 
 
-def get_dataloader(test_dataset_argv:Iterable[Dict], test_dataloader_argv:Dict, dataset_type:str):
+def get_dataloader(test_dataset_argv:Union[List[Dict], Dict], test_dataloader_argv:Dict, dataset_type:str):
     name_list = []
     dataloader_list = []
-    data_class = DatasetDict[dataset_type]
-    for dataset_argv in test_dataset_argv:
-        name_list.append(dataset_argv['name'])
-        base_dataset = data_class(**dataset_argv['base'])
-        dataset = PerturbDataset(base_dataset, **dataset_argv['main'])
-        if hasattr(dataset, 'collate_fn'):
-            test_dataloader_argv['collate_fn'] = getattr(dataset, 'collate_fn')
-        dataloader = DataLoader(dataset, **test_dataloader_argv)
-        dataloader_list.append(dataloader)
+    data_class:DATASET_TYPE = DatasetDict[dataset_type]
+    if isinstance(test_dataset_argv, list):
+        for dataset_argv in test_dataset_argv:
+            name_list.append(dataset_argv['name'])
+            base_dataset = data_class(**dataset_argv['base'])
+            dataset = PerturbDataset(base_dataset, **dataset_argv['main'])
+            if hasattr(dataset, 'collate_fn'):
+                test_dataloader_argv['collate_fn'] = getattr(dataset, 'collate_fn')
+            dataloader = DataLoader(dataset, **test_dataloader_argv)
+            dataloader_list.append(dataloader)
+    else:
+        assert hasattr(data_class, 'split_dataset'), '{} must has the function \"split_dataset\"'.format(data_class.__class__.__name__)
+        root_dataset:DATASET_TYPE = data_class(**test_dataset_argv['base'])
+        for base_dataset, name in root_dataset.split_dataset():
+            dataset = PerturbDataset(base_dataset, **test_dataset_argv['main'])
+            if hasattr(dataset, 'collate_fn'):
+                test_dataloader_argv['collate_fn'] = getattr(dataset, 'collate_fn')
+            dataloader = DataLoader(dataset, **test_dataloader_argv)
+            dataloader_list.append(dataloader)
+            name_list.append(name)
     return name_list, dataloader_list
 
 def to_npy(x0:torch.Tensor) -> np.ndarray:
@@ -195,7 +206,7 @@ def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:log
     assert N_valid > 0, "Fatal Error, no valid batch!"
     return tracker.result(), N_valid / len(test_loader)
 
-def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative'], iters:int):
+def main(config:Dict, model_type:Literal['diffusion','iterative'], iters:int):
     np.random.seed(config['seed'])
     torch.manual_seed(config['seed'])
     device = config['device']
@@ -212,17 +223,10 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
         diffuser.set_new_noise_schedule(device)
     run_argv = config['run']
     path_argv = config['path']
-    experiment_dir = Path(path_argv['base_dir'])
-    experiment_dir.mkdir(exist_ok=True)
-    experiment_dir = experiment_dir.joinpath(path_argv['name'])
-    experiment_dir.mkdir(exist_ok=True)
-    experiment_dir = experiment_dir.joinpath(dataset_type)
-    experiment_dir.mkdir(exist_ok=True)
-    checkpoints_dir = experiment_dir.joinpath(path_argv['checkpoint'])
-    checkpoints_dir.mkdir(exist_ok=True)
+    experiment_dir = Path(path_argv['base_dir']).joinpath(path_argv['name'])
+    experiment_dir.mkdir(exist_ok=True, parents=True)
     log_dir = experiment_dir.joinpath(path_argv['log'])
     log_dir.mkdir(exist_ok=True)
-    shutil.copyfile(config_path, str(log_dir.joinpath(os.path.basename(config_path))))  # copy the config file
     # logger
     logger = logging.getLogger(path_argv['log'])
     logger.setLevel(logging.INFO)
@@ -233,6 +237,7 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
         name = "{}_{}".format(diffuser.sampling_type, steps)
     else:
         name = "{}_{}".format(model_type, steps)
+    name = "{}_{}".format(name, fmt_time())
     res_dir = experiment_dir.joinpath(path_argv['results']).joinpath(name)
     if res_dir.exists():
         shutil.rmtree(str(res_dir))
@@ -273,12 +278,9 @@ def main(config:Dict, config_path:str, model_type:Literal['diffusion','iterative
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_config', default="cfg/dataset/kitti_large.yml", type=str)
-    parser.add_argument("--model_config",type=str,default="cfg/unipc_model/main.yml")
-    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='diffusion')
-    parser.add_argument("--iters",type=int,default=1)
+    parser.add_argument('--config', default="experiments/nuscenes/iter/main/log/main.yml", type=str)
+    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='iterative')
+    parser.add_argument("--iters",type=int,default=10)
     args = parser.parse_args()
-    dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
-    config = yaml.load(open(args.model_config,'r'), yaml.SafeLoader)
-    config.update(dataset_config)
-    main(config, args.model_config, args.model_type, args.iters)
+    config = yaml.load(open(args.config,'r'), yaml.SafeLoader)
+    main(config, args.model_type, args.iters)

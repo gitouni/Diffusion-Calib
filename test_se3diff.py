@@ -5,7 +5,7 @@ import argparse
 import torch
 from torch.utils.data import DataLoader
 from dataset import PerturbDataset
-from dataset import __classdict__ as DatasetDict
+from dataset import __classdict__ as DatasetDict, DATASET_TYPE
 from models.denoiser import Surrogate, __classdict__ as DenoiserDict
 from models.diffuser import SE3Diffuser
 from models.loss import se3_err, get_loss
@@ -16,22 +16,37 @@ from core.logger import LogTracker
 from core.tools import load_checkpoint_model_only
 import logging
 from pathlib import Path
-from typing import Dict, Literal, Iterable
+from typing import Dict, Union, List
 from core.tools import Timer
 
-def get_dataloader(test_dataset_argv:Iterable[Dict], test_dataloader_argv:Dict, dataset_type:str):
+def get_dataloader(test_dataset_argv:Union[List[Dict], Dict], test_dataloader_argv:Dict, dataset_type:str):
     name_list = []
     dataloader_list = []
-    data_class = DatasetDict[dataset_type]
-    for dataset_argv in test_dataset_argv:
-        name_list.append(dataset_argv['name'])
-        base_dataset = data_class(**dataset_argv['base'])
-        dataset = PerturbDataset(base_dataset, **dataset_argv['main'])
-        if hasattr(dataset, 'collate_fn'):
-            test_dataloader_argv['collate_fn'] = getattr(dataset, 'collate_fn')
-        dataloader = DataLoader(dataset, **test_dataloader_argv)
-        dataloader_list.append(dataloader)
+    data_class:DATASET_TYPE = DatasetDict[dataset_type]
+    if isinstance(test_dataset_argv, list):
+        for dataset_argv in test_dataset_argv:
+            name_list.append(dataset_argv['name'])
+            base_dataset = data_class(**dataset_argv['base'])
+            dataset = PerturbDataset(base_dataset, **dataset_argv['main'])
+            if hasattr(dataset, 'collate_fn'):
+                test_dataloader_argv['collate_fn'] = getattr(dataset, 'collate_fn')
+            dataloader = DataLoader(dataset, **test_dataloader_argv)
+            dataloader_list.append(dataloader)
+    else:
+        assert hasattr(data_class, 'split_dataset'), '{} must has the function \"split_dataset\"'.format(data_class.__class__.__name__)
+        root_dataset:DATASET_TYPE = data_class(**test_dataset_argv['base'])
+        cache_dir = Path(test_dataset_argv['main']['file'])
+        cache_dir.mkdir(exist_ok=True, parents=True)
+        for base_dataset, name in root_dataset.split_dataset():
+            test_dataset_argv['main']['file'] = str(cache_dir.joinpath(name+'.txt'))
+            dataset = PerturbDataset(base_dataset, **test_dataset_argv['main'])
+            if hasattr(dataset, 'collate_fn'):
+                test_dataloader_argv['collate_fn'] = getattr(dataset, 'collate_fn')
+            dataloader = DataLoader(dataset, **test_dataloader_argv)
+            dataloader_list.append(dataloader)
+            name_list.append(name)
     return name_list, dataloader_list
+
 
 def to_npy(x0:torch.Tensor) -> np.ndarray:
     return x0.detach().cpu().numpy()
@@ -87,7 +102,7 @@ def test_diffuser(test_loader:DataLoader, name:str, diffuser:SE3Diffuser, logger
     assert N_valid > 0, "Fatal Error, no valid batch!"
     return tracker.result(), N_valid / len(test_loader)
 
-def main(config:Dict, config_path:str, model_type:str):
+def main(config:Dict, model_type:str):
     np.random.seed(config['seed'])
     torch.manual_seed(config['seed'])
     device = config['device']
@@ -110,7 +125,6 @@ def main(config:Dict, config_path:str, model_type:str):
     checkpoints_dir.mkdir(exist_ok=True)
     log_dir = experiment_dir.joinpath(path_argv['log'])
     log_dir.mkdir(exist_ok=True)
-    shutil.copyfile(config_path, str(log_dir.joinpath(os.path.basename(config_path))))  # copy the config file
     # logger
     logger = logging.getLogger(path_argv['log'])
     logger.setLevel(logging.INFO)
@@ -150,11 +164,8 @@ def main(config:Dict, config_path:str, model_type:str):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_config', default="cfg/dataset/kitti_large.yml", type=str)
-    parser.add_argument("--model_config",type=str,default="cfg/unipc_sd_model/rggnet_sd.yml")
+    parser.add_argument('--config', default="experiments/nuscenes/nlsd/main/log/main_sd.yml", type=str)
     parser.add_argument('--model_type',type=str, default='se3_diffusion')
     args = parser.parse_args()
-    dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
-    config = yaml.load(open(args.model_config,'r'), yaml.SafeLoader)
-    config.update(dataset_config)
-    main(config, args.model_config, args.model_type)
+    config = yaml.load(open(args.config,'r'), yaml.SafeLoader)
+    main(config, args.model_type)

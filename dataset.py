@@ -4,25 +4,27 @@ import torch
 from PIL import Image
 from torchvision.transforms import transforms as Tf
 import numpy as np
+# kitti dependences
 import pykitti
-from nuscenes.nuscenes import NuScenes
+# nuscenes dependences
+from nuscenes.nuscenes import NuScenes, NuScenesExplorer
+from nuscenes.utils.map_mask import MapMask
+# from nuscenes.utils.color_map import get_colormap
 from pyquaternion import Quaternion
 from nuscenes.utils.data_classes import LidarPointCloud
+import time
 import open3d as o3d
-from models.util import transform, se3
 from PIL import Image
 from torch import Generator, randperm
 from torch.utils.data import Dataset, Subset, BatchSampler
-from typing import Iterable, List, Dict, Union, Optional, Tuple, Sequence, Literal
-# from models.colmap.io import read_model, CAMERA_TYPE
-from models.tools.cmsc import nptran
-from models.util.transform import inv_pose_np
-# from RANSAC.base import RotEstimator,TslEstimator,RotRANSAC, TslRANSAC
+from typing import Iterable, List, Dict, Union, Optional, Tuple, Sequence, Literal, TypeVar, Generator
+from functools import partial
+from models.tools.csrc import furthest_point_sampling
+from models.util import transform, se3
+from models.util.transform import nptran, inv_pose_np
+from models.util.constant import IMAGENET_DEFAULT_MEAN as IMAGENET_MEAN
+from models.util.constant import IMAGENET_DEFAULT_STD as IMAGENET_STD
 import re
-
-IMAGENET_MEAN=[0.485, 0.456, 0.406]
-IMAGENET_STD=[0.229, 0.224, 0.225]
-
 
 
 def subset_split(dataset:Dataset, lengths:Sequence[int], seed:Optional[int]=None):
@@ -54,7 +56,7 @@ def check_length(root:str,save_name='data_len.json'):
         json.dump(dict_len,f)
         
 class KITTIFilter:
-    def __init__(self, voxel_size:Optional[float]=None, min_dist:float=0.15, skip_point:int=1):
+    def __init__(self, voxel_size:Optional[float]=None, positive_x:bool=False, min_dist:float=0.15, skip_point:int=1):
         """KITTIFilter
 
         Args:
@@ -64,11 +66,14 @@ class KITTIFilter:
         self.voxel_size = voxel_size
         self.min_dist = min_dist
         self.skip_point = skip_point
+        self.positive_x = positive_x
         
     def __call__(self, x:np.ndarray):
         if self.skip_point > 1:
             x = x[::self.skip_point,:]
         rev_x = np.linalg.norm(x, axis=1) > self.min_dist
+        if self.positive_x:
+            rev_x = np.logical_and(rev_x, x[:,0] > 0)
         
         # _, ind = pcd.remove_radius_outlier(nb_points=self.n_neighbor, radius=self.voxel_size)
         # pcd.select_by_index(ind)
@@ -99,6 +104,7 @@ class Resampler:
         else:
             idx = np.hstack([idx,np.random.choice(num_points,self.num-num_points,replace=True)]) # (self.num,dim)
             return x[idx]
+        
 
 class MaxResampler:
     """ [N, D] -> [M, D] (M<=max_num)\n
@@ -122,7 +128,7 @@ class ToTensor:
         return torch.from_numpy(x).type(self.tensor_type)
 
 
-class KITTIBatchSampler(BatchSampler):
+class SeqBatchSampler(BatchSampler):
     def __init__(self, num_sequences:int, len_of_sequences:Sequence[int], dataset_len:int, num_samples:int=4):
         # Batch sampler with a dynamic number of sequences
         # max_images >= number_of_sequences * images_per_sequence
@@ -141,45 +147,6 @@ class KITTIBatchSampler(BatchSampler):
 
     def __len__(self):
         return self.dataset_len
-    
-
-
-# class PerturbDataset(Dataset):
-#     def __init__(self,dataset:Dataset,
-#                  max_deg:float,
-#                  max_tran:float,
-#                  mag_randomly=True,
-#                  file=None):
-#         self.dataset = dataset
-#         self.file = file
-#         if self.file is not None:
-#             if os.path.isfile(self.file):
-#                 self.perturb = torch.from_numpy(np.loadtxt(self.file, dtype=np.float32))[None,...]  # (1,N,6)
-#             else:
-#                 random_transform = transform.UniformTransformSE3(max_deg, max_tran, mag_randomly)
-#                 perturb = random_transform.generate_transform(len(dataset))
-#                 np.savetxt(self.file, perturb.cpu().detach().numpy(), fmt='%0.6f')
-#                 self.perturb = perturb.unsqueeze(0)  # (1,N,6)
-#         else:
-#             self.transform = transform.UniformTransformSE3(max_deg, max_tran, mag_randomly)
-
-#     def __len__(self):
-#         return len(self.dataset)
-
-#     def __getitem__(self, index:int):
-#         data = self.dataset[index]
-#         if self.file is None:  # randomly generate igt
-#             igt_x = self.transform.generate_transform(1)
-#             igt = se3.exp(igt_x).squeeze(0)
-#             gt = transform.inv_pose(igt)
-#         else:
-#             igt = se3.exp(self.perturb[:,index,:]).squeeze(0)  # (1,6) -> (1,4,4)
-#             gt = transform.inv_pose(igt).squeeze(0)
-#         extran = igt @ data['extran']  # add noise to the ground-truth extran
-#         data.update(dict(gt=gt, extran=extran))  # extran here denotes the perturbed gt extran
-#         return data
-
-
 
 class BaseKITTIDataset(Dataset):
     def __init__(self,basedir:str,
@@ -217,6 +184,14 @@ class BaseKITTIDataset(Dataset):
     def __len__(self):
         return self.sumsep[-1]
     
+    def get_seq_params(self) -> Tuple[int, List[int]]:
+        """Get num_seqs, num_data_per_seq
+
+        Returns:
+            Tuple[int, List[int]]: num_seqs, num_data_per_seq
+        """
+        return len(self.sep), self.sep
+    
     @staticmethod
     def check(odom_obj:pykitti.odometry,cam_id:int,seq:str)->bool:
         calib = odom_obj.calib
@@ -232,16 +207,16 @@ class BaseKITTIDataset(Dataset):
             return self.group_sub_item(index)
         group_id = np.digitize(index,self.sumsep,right=False)
         if group_id > 0:
-            sub_index = index - self.sumsep[group_id-1]
+            sub_idx = index - self.sumsep[group_id-1]
         else:
-            sub_index = index
-        return self.group_sub_item((group_id, sub_index))
+            sub_idx = index
+        return self.group_sub_item((group_id, sub_idx))
         
     def group_sub_item(self, tuple_index:Tuple[int,int]):
-        group_idx, sub_index = tuple_index
+        group_idx, sub_idx = tuple_index
         data = self.kitti_datalist[group_idx]
         T_cam2velo = getattr(data.calib,'T_cam%d_velo'%self.cam_id)  
-        raw_img:Image.Image = getattr(data,'get_cam%d'%self.cam_id)(sub_index)  # PIL Image
+        raw_img:Image.Image = getattr(data,'get_cam%d'%self.cam_id)(sub_idx)  # PIL Image
         H,W = raw_img.height, raw_img.width
         K_cam:np.ndarray = getattr(data.calib,'K_cam%d'%self.cam_id)  
         if self.resize_size is not None:
@@ -253,7 +228,7 @@ class BaseKITTIDataset(Dataset):
        
         raw_img = raw_img.resize([RW,RH],Image.Resampling.BILINEAR)
         _img = self.img_tran(raw_img)  # raw img input (3,H,W)
-        pcd:np.ndarray = data.get_velo(sub_index)[:,:3]
+        pcd:np.ndarray = data.get_velo(sub_idx)[:,:3]
         pcd = self.pcd_tran(pcd)
         if self.extend_ratio is not None:
             calibed_pcd = nptran(pcd, T_cam2velo).T
@@ -275,7 +250,7 @@ class BaseKITTIDataset(Dataset):
             "sensor_w": RW,
             "projection_mode": "perspective"
         }
-        return dict(img=_img,pcd=_pcd, camera_info=camera_info, extran=T_cam2velo, group_idx=group_idx, sub_index=sub_index)
+        return dict(img=_img,pcd=_pcd, camera_info=camera_info, extran=T_cam2velo, group_idx=group_idx, sub_idx=sub_idx)
     
     @staticmethod
     def collate_fn(zipped_x:Iterable[Dict[str, Union[torch.Tensor, Dict]]]):
@@ -284,7 +259,7 @@ class BaseKITTIDataset(Dataset):
         batch['pcd'] = torch.stack([x['pcd'] for x in zipped_x])
         batch['extran'] = torch.stack([x['extran'] for x in zipped_x])
         batch['group_idx'] = [x['group_idx'] for x in zipped_x]
-        batch['sub_index'] = [x['sub_index'] for x in zipped_x]
+        batch['sub_idx'] = [x['sub_idx'] for x in zipped_x]
         batch['camera_info'] = zipped_x[0]['camera_info']
         batch['camera_info']['fx'] = torch.tensor([x['camera_info']['fx'] for x in zipped_x], dtype=torch.float32)
         batch['camera_info']['fy'] = torch.tensor([x['camera_info']['fy'] for x in zipped_x], dtype=torch.float32)
@@ -297,7 +272,7 @@ class PerturbDataset(Dataset):
                  max_deg:float,
                  max_tran:float,
                  mag_randomly=True,
-                 file=None):
+                 file:Optional[str]=None):
         self.dataset = dataset
         self.file = file
         if self.file is not None:
@@ -317,8 +292,8 @@ class PerturbDataset(Dataset):
     def __getitem__(self, index:Union[int, Tuple[int,int]]):
         data = self.dataset[index]
         if isinstance(index, Tuple):
-            group_idx, sub_index = index
-            total_index = self.dataset.sumsep[group_idx] + sub_index
+            group_idx, sub_idx = index
+            total_index = self.dataset.sumsep[group_idx] + sub_idx
         else:
             total_index = index
         extran = data['extran']  # (4,4)
@@ -331,7 +306,7 @@ class PerturbDataset(Dataset):
             gt = transform.inv_pose(igt).squeeze(0)
         extran = igt @ extran
         new_data = dict(img=data['img'],pcd=data['pcd'], gt=gt, extran=extran, camera_info=data['camera_info'],
-                        group_idx=data['group_idx'], sub_index=data['sub_index'])
+                        group_idx=data['group_idx'], sub_idx=data['sub_idx'])
         return new_data
     
     @staticmethod
@@ -340,7 +315,7 @@ class PerturbDataset(Dataset):
         batch['img'] = torch.stack([x['img'] for x in zipped_x])
         batch['pcd'] = torch.stack([x['pcd'] for x in zipped_x])
         batch['group_idx'] = [x['group_idx'] for x in zipped_x]
-        batch['sub_index'] = [x['sub_index'] for x in zipped_x]
+        batch['sub_idx'] = [x['sub_idx'] for x in zipped_x]
         batch['extran'] = torch.stack([x['extran'] for x in zipped_x])
         batch['gt'] = torch.stack([x['gt'] for x in zipped_x])
         batch['camera_info'] = zipped_x[0]['camera_info']
@@ -349,23 +324,175 @@ class PerturbDataset(Dataset):
         batch['camera_info']['cx'] = torch.tensor([x['camera_info']['cx'] for x in zipped_x], dtype=torch.float32)
         batch['camera_info']['cy'] = torch.tensor([x['camera_info']['cy'] for x in zipped_x], dtype=torch.float32)
         return batch
-   
+
+class LightNuscenes(NuScenes):
+    "Light Copy of Nuscenes for Calibration. Data unrelated to calibration are omitted. Decrease loading time from 30.0s to 4.0s."
+    def __init__(self, version = 'v1.0-mini', dataroot = '/data/sets/nuscenes', verbose = True, map_resolution = 0.1):
+        """
+        Loads database and creates reverse indexes and shortcuts.
+        :param version: Version to load (e.g. "v1.0", ...).
+        :param dataroot: Path to the tables and data.
+        :param verbose: Whether to print status messages during load.
+        :param map_resolution: Resolution of maps (meters).
+        """
+        self.version = version
+        self.dataroot = dataroot
+        self.verbose = verbose
+        self.table_names = ['category', 'attribute', 'visibility', 'instance', 'sensor', 'calibrated_sensor',
+                            'log', 'scene', 'sample', 'sample_data','map']
+
+        assert os.path.exists(self.table_root), 'Database version not found: {}'.format(self.table_root)
+
+        start_time = time.time()
+        if verbose:
+            print("======\nLoading NuScenes tables for version {}...".format(self.version))
+
+        # Explicitly assign tables to help the IDE determine valid class members.
+        for name in self.table_names:
+            setattr(self, name, self.__load_table__(name))  # remove unnecessary keys: ego_pose, sample_annotation, map
+        # self.category = self.__load_table__('category')
+        # self.attribute = self.__load_table__('attribute')
+        # self.visibility = self.__load_table__('visibility')
+        # self.instance = self.__load_table__('instance')
+        # self.sensor = self.__load_table__('sensor')
+        # self.calibrated_sensor = self.__load_table__('calibrated_sensor')
+        # self.ego_pose = self.__load_table__('ego_pose')
+        # self.log = self.__load_table__('log')
+        # self.scene = self.__load_table__('scene')
+        # self.sample = self.__load_table__('sample')
+        # self.sample_data = self.__load_table__('sample_data')
+        # self.sample_annotation = self.__load_table__('sample_annotation')
+        # self.map = self.__load_table__('map')
+
+        # Initialize the colormap which maps from class names to RGB values.
+        # self.colormap = get_colormap()
+
+        # lidar_tasks = [t for t in ['lidarseg', 'panoptic'] if os.path.exists(os.path.join(self.table_root, t + '.json'))]
+        # if len(lidar_tasks) > 0:
+        #     self.lidarseg_idx2name_mapping = dict()
+        #     self.lidarseg_name2idx_mapping = dict()
+        #     self.load_lidarseg_cat_name_mapping()
+        # for i, lidar_task in enumerate(lidar_tasks):
+        #     if self.verbose:
+        #         print(f'Loading nuScenes-{lidar_task}...')
+        #     if lidar_task == 'lidarseg':
+        #         self.lidarseg = self.__load_table__(lidar_task)
+        #     else:
+        #         self.panoptic = self.__load_table__(lidar_task)
+
+        #     setattr(self, lidar_task, self.__load_table__(lidar_task))
+        #     label_files = os.listdir(os.path.join(self.dataroot, lidar_task, self.version))
+        #     num_label_files = len([name for name in label_files if (name.endswith('.bin') or name.endswith('.npz'))])
+        #     num_lidarseg_recs = len(getattr(self, lidar_task))
+        #     assert num_lidarseg_recs == num_label_files, \
+        #         f'Error: there are {num_label_files} label files but {num_lidarseg_recs} {lidar_task} records.'
+        #     self.table_names.append(lidar_task)
+        #     # Sort the colormap to ensure that it is ordered according to the indices in self.category.
+        #     self.colormap = dict({c['name']: self.colormap[c['name']]
+        #                           for c in sorted(self.category, key=lambda k: k['index'])})
+
+        # # If available, also load the image_annotations table created by export_2d_annotations_as_json().
+        # if os.path.exists(os.path.join(self.table_root, 'image_annotations.json')):
+        #     self.image_annotations = self.__load_table__('image_annotations')
+
+        # Initialize map mask for each map record.
+        for map_record in self.map:
+            map_record['mask'] = MapMask(os.path.join(self.dataroot, map_record['filename']), resolution=map_resolution)
+
+        if verbose:
+            for table in self.table_names:
+                print("{} {},".format(len(getattr(self, table)), table))
+            print("Done loading in {:.3f} seconds.\n======".format(time.time() - start_time))
+
+        # Make reverse indexes for common lookups.
+        self.__make_reverse_index__(verbose)
+
+        # Initialize NuScenesExplorer class.
+        self.explorer = NuScenesExplorer(self)
+
+    def __make_reverse_index__(self, verbose: bool) -> None:
+        """
+        De-normalizes database to create reverse indices for common cases.
+        :param verbose: Whether to print outputs.
+        """
+
+        start_time = time.time()
+        if verbose:
+            print("Reverse indexing ...")
+
+        # Store the mapping from token to table index for each table.
+        self._token2ind = dict()
+        for table in self.table_names:
+            self._token2ind[table] = dict()
+
+            for ind, member in enumerate(getattr(self, table)):
+                self._token2ind[table][member['token']] = ind
+
+        # Decorate (adds short-cut) sample_annotation table with for category name.
+        # for record in self.sample_annotation:
+        #     inst = self.get('instance', record['instance_token'])
+        #     record['category_name'] = self.get('category', inst['category_token'])['name']
+
+        # Decorate (adds short-cut) sample_data with sensor information.
+        for record in self.sample_data:
+            cs_record = self.get('calibrated_sensor', record['calibrated_sensor_token'])
+            sensor_record = self.get('sensor', cs_record['sensor_token'])
+            record['sensor_modality'] = sensor_record['modality']
+            record['channel'] = sensor_record['channel']
+
+        # Reverse-index samples with sample_data and annotations.
+        for record in self.sample:
+            record['data'] = {}
+            record['anns'] = []
+
+        for record in self.sample_data:
+            if record['is_key_frame']:
+                sample_record = self.get('sample', record['sample_token'])
+                sample_record['data'][record['channel']] = record['token']
+
+        # for ann_record in self.sample_annotation:
+        #     sample_record = self.get('sample', ann_record['sample_token'])
+        #     sample_record['anns'].append(ann_record['token'])
+
+        # Add reverse indices from log records to map records.
+        if 'log_tokens' not in self.map[0].keys():
+            raise Exception('Error: log_tokens not in map table. This code is not compatible with the teaser dataset.')
+        log_to_map = dict()
+        for map_record in self.map:
+            for log_token in map_record['log_tokens']:
+                log_to_map[log_token] = map_record['token']
+        for log_record in self.log:
+            log_record['map_token'] = log_to_map[log_record['token']]
+
+        if verbose:
+            print("Done reverse indexing in {:.1f} seconds.\n======".format(time.time() - start_time))
 
 class NuSceneDataset(Dataset):
-    def __init__(self, version='v1.0-mini', dataroot='data/nuScenes',
-            scene_names:Optional[List[str]]=None, 
+    def __init__(self, version='v1.0-trainval', dataroot='data/nuscenes/v1.0-full',
+            scene_names:Optional[Union[str,List[str]]]=None, daylight:bool=True,
             cam_sensor_name:Literal['CAM_FRONT','CAM_FRONT_RIGHT','CAM_BACK_RIGHT','CAM_BACK','CAM_BACK_LEFT','CAM_FRONT_LEFT']='CAM_FRONT',
             point_sensor_name:str='LIDAR_TOP', skip_point:int=1,
             voxel_size:Optional[float]=None, min_dist=0.15, pcd_sample_num=8192,
             resize_size:Optional[Tuple[int,int]]=None, extend_ratio:Optional[Tuple[float,float]]=None) -> None:
-        self.nusc = NuScenes(version=version, dataroot=dataroot, verbose=False)
+        self.nusc = LightNuscenes(version=version, dataroot=dataroot, verbose=True)
         self.cam_sensor_name = cam_sensor_name
         self.point_sensor_name = point_sensor_name
+        if isinstance(scene_names, str):
+            if os.path.exists(scene_names):
+                scene_names = np.loadtxt(scene_names, dtype=str).tolist()
+            else:
+                scene_names = [scene_names]
         if scene_names is not None:
+            scene_names.sort()
             self.select_scene = [scene for scene in self.nusc.scene if scene['name'] in scene_names]
         else:
-            self.select_scene = [scene for scene in self.nusc.scene if re.search('night',scene['description'].lower()) is None]
-        self.scene_num_list = [scene['nbr_samples'] for scene in self.select_scene]
+            self.select_scene = [scene for scene in self.nusc.scene if (not daylight) or (re.search('night',scene['description'].lower()) is None)]
+            self.select_scene.sort(key=lambda t: t['name'])
+        self.scene_num_list = []
+        self.scene_name_list = []
+        for scene in self.select_scene:
+            self.scene_name_list.append(scene['name'])
+            self.scene_num_list.append(scene['nbr_samples'])
         self.sumsep = np.cumsum(self.scene_num_list)
         self.sample_tokens_by_scene = []
         for scene, nbr_sample in zip(self.select_scene, self.scene_num_list):
@@ -390,18 +517,26 @@ class NuSceneDataset(Dataset):
     def __len__(self):
         return self.sumsep[-1]
     
+    def get_seq_params(self) -> Tuple[int, List[int]]:
+        """Get num_seqs, num_data_per_seq
+
+        Returns:
+            Tuple[int, List[int]]: num_seqs, num_data_per_seq
+        """
+        return len(self.scene_num_list), self.scene_num_list
+    
     def __getitem__(self, index:Union[int, Tuple[int,int]]):
         if isinstance(index, Tuple):
             return self.group_sub_item(*index)
-        group_id = np.digitize(index,self.sumsep,right=False)
+        group_id = np.digitize(index,self.sumsep,right=False).item()
         if group_id > 0:
-            sub_index = index - self.sumsep[group_id-1]
+            sub_idx = index - self.sumsep[group_id-1]
         else:
-            sub_index = index
-        return self.group_sub_item(group_id, sub_index)
+            sub_idx = index
+        return self.group_sub_item(group_id, sub_idx)
 
-    def group_sub_item(self, group_idx:int, sub_index:int):
-        token = self.sample_tokens_by_scene[group_idx][sub_index]
+    def group_sub_item(self, group_idx:int, sub_idx:int):
+        token = self.sample_tokens_by_scene[group_idx][sub_idx]
         sample = self.nusc.get('sample', token)
         img, pcd, extran, intran = self.get_data(sample, self.cam_sensor_name, self.point_sensor_name)
         camera_info = {
@@ -416,7 +551,11 @@ class NuSceneDataset(Dataset):
         _img = self.img_tran(img)
         _pcd = self.tensor_tran(pcd.T)  # (3,N)
         extran = self.tensor_tran(extran)
-        return dict(img=_img,pcd=_pcd, camera_info=camera_info, extran=extran, group_idx=group_idx, sub_index=sub_index)
+        return dict(img=_img,pcd=_pcd, camera_info=camera_info, extran=extran, group_idx=group_idx, sub_idx=sub_idx)
+    
+    def split_dataset(self) -> Generator[Tuple[Dataset, str], None, None]:
+        for group_idx, (scene_num, scene_name) in enumerate(zip(self.scene_num_list, self.scene_name_list)):
+            yield NusceneDatasetSeqWrapper(self, group_idx, scene_num), scene_name
     
     def get_data(self, sample_record:Dict,
             camera_channel:Literal['CAM_FRONT','CAM_FRONT_RIGHT','CAM_BACK_RIGHT','CAM_BACK','CAM_BACK_LEFT','CAM_FRONT_LEFT'],
@@ -468,324 +607,49 @@ class NuSceneDataset(Dataset):
         batch['pcd'] = torch.stack([x['pcd'] for x in zipped_x])
         batch['extran'] = torch.stack([x['extran'] for x in zipped_x])
         batch['group_idx'] = [x['group_idx'] for x in zipped_x]
-        batch['sub_index'] = [x['sub_index'] for x in zipped_x]
+        batch['sub_idx'] = [x['sub_idx'] for x in zipped_x]
         batch['camera_info'] = zipped_x[0]['camera_info']
         batch['camera_info']['fx'] = torch.tensor([x['camera_info']['fx'] for x in zipped_x], dtype=torch.float32)
         batch['camera_info']['fy'] = torch.tensor([x['camera_info']['fy'] for x in zipped_x], dtype=torch.float32)
         batch['camera_info']['cx'] = torch.tensor([x['camera_info']['cx'] for x in zipped_x], dtype=torch.float32)
         batch['camera_info']['cy'] = torch.tensor([x['camera_info']['cy'] for x in zipped_x], dtype=torch.float32)
         return batch
+    
+class NusceneDatasetSeqWrapper(Dataset):
+    def __init__(self, root_dataset:NuSceneDataset, group_idx:int, scene_num:int):
+        self.root_dataset = root_dataset
+        self.group_idx = group_idx
+        self.scene_num = scene_num
 
-__classdict__ = {'kitti':BaseKITTIDataset, 'nuscene':NuSceneDataset}
-
+    def __len__(self):
+        return self.scene_num
+    
+    def __getitem__(self, index:int):
+        return self.root_dataset.group_sub_item(self.group_idx, index)
+    
+    def collate_fn(self, *args, **argv):
+        return self.root_dataset.collate_fn(*args, **argv)
+    
+# for external import
+__classdict__ = {'kitti':BaseKITTIDataset, 'nuscenes':NuSceneDataset}
+DATASET_TYPE = TypeVar('DATASET_TYPE', BaseKITTIDataset, NuSceneDataset)
 if __name__ == "__main__":
-    base_dataset = BaseKITTIDataset('data/kitti', seqs=['00','01'], skip_frame=3)
-    dataset = PerturbDataset(base_dataset, 30, 0.3, True)
-    data = dataset[0]
+    # base_dataset = BaseKITTIDataset('data/kitti', seqs=['16','17','18'], skip_frame=1)
+    # dataset = PerturbDataset(base_dataset, 15, 0.15, True)
+    # print("dataset len:{}".format(len(base_dataset)))
+    # data = dataset[0]
+    # for key,value in data.items():
+    #     if hasattr(value, 'shape'):
+    #         shape = value.shape
+    #     else:
+    #         shape = value
+    #     print('{key}: {shape}'.format(key=key, shape=shape))
+    base_dataset = NuSceneDataset()
+    print("dataset len:{}".format(len(base_dataset)))
+    data = base_dataset[0]
     for key,value in data.items():
         if hasattr(value, 'shape'):
             shape = value.shape
         else:
             shape = value
         print('{key}: {shape}'.format(key=key, shape=shape))
-    
-        
-
-
-# class CBADataset(Dataset):
-#     def __init__(self, gt_Tcl:str, image_dir:str, lidar_dir:str, lidar_pose:str, model_dir:str,
-#              pair_file:str, kpt_dir:str, match_dir:str, max_frame_corr:int,
-#              filter_params:Optional[Dict[str,float]]=None, pcd_sample_num:int=-1
-#              ):
-#         self.gt_Tcl = np.loadtxt(gt_Tcl)
-#         image_files = sorted(os.listdir(image_dir))
-#         lidar_files = sorted(os.listdir(lidar_dir))
-#         kpt_files = sorted(os.listdir(kpt_dir))
-#         cameras, images, points3d = read_model(model_dir, '.bin')
-#         camera_id = cameras.keys().__iter__().__next__()
-#         camera_data = cameras[camera_id]
-#         assert camera_data.model in CAMERA_TYPE.keys(), 'Unknown camera type:{}'.format(camera_data.model)
-#         params_dict = {key: value for key, value in zip(CAMERA_TYPE[camera_data.model], camera_data.params)}
-#         if 'f' in params_dict:
-#             fx = fy = params_dict['f']
-#         else:
-#             fx = params_dict['fx']
-#             fy = params_dict['fy']
-#         cx = params_dict['cx']
-#         cy = params_dict['cy']
-#         assert len(images.keys()) == len(image_files) == len(lidar_files), "images ({}), image_files ({}), lidar_files ({})".format(len(images.keys()), len(image_files), len(lidar_files))
-#         self.img_files = [os.path.join(image_dir, file) for file in image_files]
-#         self.lidar_files = [os.path.join(lidar_dir, file) for file in lidar_files]
-#         self.kpts = [np.load(os.path.join(kpt_dir, file))['keypoints'] for file in kpt_files]
-#         matches = [np.load(os.path.join(match_dir, file))['match'] for file in sorted(os.listdir(match_dir))]
-#         self.cam_poses = []
-#         self.cam_mappoints = []
-#         for i in range(1,len(image_files)+1):
-#             img_data = images[i]
-#             extrinsics = np.eye(4)
-#             extrinsics[:3,:3] = img_data.qvec2rotmat()
-#             extrinsics[:3,3] = img_data.tvec
-#             self.cam_poses.append(extrinsics)
-#             point3d_ids = img_data.point3D_ids
-#             point3d_valid_mask = np.nonzero(point3d_ids != -1)[0]
-#             point3d_ids = point3d_ids[point3d_valid_mask]
-#             mapppoints = np.stack([points3d[idx].xyz for idx in point3d_ids], axis=0)
-#             mapppoints = nptran(mapppoints, extrinsics)  # frame coordinate system
-#             self.cam_mappoints.append(mapppoints)
-#         pose_graph = o3d.io.read_pose_graph(lidar_pose)
-#         lidar_pose = [inv_pose_np(node.pose) for node in pose_graph.nodes]
-#         N = len(pose_graph.nodes)
-#         lidar_edge = [src_pose @ inv_pose_np(tgt_pose) for src_pose, tgt_pose in zip(lidar_pose[:-1], lidar_pose[1:])]
-#         camera_edge = [src_pose @ inv_pose_np(tgt_pose) for src_pose, tgt_pose in zip(self.cam_poses[:-1], self.cam_poses[1:])]
-#         camera_rotedge, lidar_rotedge = map(lambda edge_list:[T[:3,:3] for T in edge_list],[camera_edge, lidar_edge])
-#         ransac_state = dict(min_samples=3,
-#                                 max_trials=5000,
-#                                 stop_prob=0.99,
-#                                 random_state=0)
-#         ransac_rot_estimator = RotRANSAC(RotEstimator(),
-#                                 **ransac_state)
-#         alpha,beta = map(ransac_rot_estimator.toVecList,[camera_rotedge, lidar_rotedge])
-#         best_rot, rot_inlier_mask = ransac_rot_estimator.fit(beta,alpha)
-#         ransac_tsl_estimator = TslRANSAC(TslEstimator(best_rot),
-#                                      **ransac_state)
-#         inlier_camera_edge = [edge for i,edge in enumerate(camera_edge) if rot_inlier_mask[i]]
-#         inlier_lidar_edge = [edge for i,edge in enumerate(lidar_edge) if rot_inlier_mask[i]]
-#         camera_flatten = ransac_tsl_estimator.flatten(inlier_camera_edge)
-#         lidar_flatten = ransac_tsl_estimator.flatten(inlier_lidar_edge)
-#         _, best_scale, _ = ransac_tsl_estimator.fit(camera_flatten, lidar_flatten)
-#         self.scale = best_scale
-#         self.pair = json.load(open(pair_file, 'r'))
-#         self.pair_dict = dict()
-#         for i, pair in enumerate(self.pair):
-#             src_idx, tgt_idx = pair
-#             if tgt_idx - src_idx > max_frame_corr:
-#                 continue
-#             if src_idx not in self.pair_dict.keys():
-#                 self.pair_dict[src_idx] = []
-#             self.pair_dict[src_idx].append([tgt_idx, matches[i]])
-#             if tgt_idx not in self.pair_dict.keys():
-#                 self.pair_dict[tgt_idx] = []
-#             self.pair_dict[tgt_idx].append([src_idx, matches[i][:,::-1]])  # swap source and target
-#         self.img_tran = Tf.Compose([
-#              Tf.ToTensor(),
-#              Tf.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
-#         self.image_shape = [camera_data.height, camera_data.width]
-#         self.pcd_tran = KITTIFilter(**filter_params) if filter_params else lambda x:x
-#         self.resample_tran = Resampler(pcd_sample_num)
-#         self.camera_info = {
-#             "fx": fx,
-#             "fy": fy,
-#             "cx": cx,
-#             "cy": cy,
-#             "sensor_h": camera_data.height,
-#             "sensor_w": camera_data.width,
-#             "projection_mode": "perspective"
-#         }
-#         self.tensor_tran = lambda x:torch.from_numpy(x).to(torch.float32)
-#     def __len__(self):
-#         return len(self.img_files)
-
-#     def __getitem__(self, index:int):
-#         image = self.img_tran(Image.open(self.img_files[index]))
-#         pcd = np.load(self.lidar_files[index])
-#         pcd_rev = pcd[:,0] > 0
-#         pcd = self.pcd_tran(pcd[pcd_rev,:])
-#         pcd = self.resample_tran(pcd)  # (N, 3)
-#         match_list = []
-#         tgt_kpt_list = []
-#         src_extran = self.cam_poses[index]
-#         tgt_extran_list = []
-#         for tgt_idx, matches in self.pair_dict[index]:
-#             match_list.append(matches)
-#             tgt_kpt_list.append(self.kpts[tgt_idx])
-#             tgt_extran_list.append(self.cam_poses[tgt_idx])
-#         intran = np.array([[self.camera_info['fx'],0,self.camera_info['cx']],
-#                            [0,self.camera_info['fy'],self.camera_info['cy']],
-#                            [0,0,1]])
-#         image_hw = (self.camera_info['sensor_h'], self.camera_info['sensor_w'])
-#         cba_data = dict(src_pcd=pcd, src_kpt=self.kpts[index], tgt_kpt_list=tgt_kpt_list, match_list=match_list,
-#             src_extran=src_extran, tgt_extran_list=tgt_extran_list, intran=intran, scale=self.scale, img_hw=image_hw)
-#         ca_data = dict(cam_mappoint=self.cam_mappoints[index], pcd=pcd, scale=self.scale)
-#         return dict(img=image, pcd=self.tensor_tran(pcd.T), camera_info=self.camera_info, extran=self.tensor_tran(self.gt_Tcl), cba_data=cba_data, ca_data=ca_data)
-
-# class FlowDataset(Dataset):
-#     def __init__(self, gt_Tcl:str, image_dir:str, lidar_dir:str, lidar_pose:str, model_dir:str,
-#              pair_file:str, flow_dir:str, filter_params:Optional[Dict[str,float]]=None, pcd_sample_num:int=-1
-#              ):
-#         self.gt_Tcl = np.loadtxt(gt_Tcl)
-#         image_files = sorted(os.listdir(image_dir))
-#         lidar_files = sorted(os.listdir(lidar_dir))
-#         flow_files = sorted(os.listdir(flow_dir))
-#         cameras, images, points3d = read_model(model_dir, '.bin')
-#         camera_id = cameras.keys().__iter__().__next__()
-#         camera_data = cameras[camera_id]
-#         assert camera_data.model in CAMERA_TYPE.keys(), 'Unknown camera type:{}'.format(camera_data.model)
-#         params_dict = {key: value for key, value in zip(CAMERA_TYPE[camera_data.model], camera_data.params)}
-#         if 'f' in params_dict:
-#             fx = fy = params_dict['f']
-#         else:
-#             fx = params_dict['fx']
-#             fy = params_dict['fy']
-#         cx = params_dict['cx']
-#         cy = params_dict['cy']
-#         assert len(images.keys()) == len(image_files) == len(lidar_files), "images ({}), image_files ({}), lidar_files ({})".format(len(images.keys()), len(image_files), len(lidar_files))
-#         self.img_files = [os.path.join(image_dir, file) for file in image_files]
-#         self.lidar_files = [os.path.join(lidar_dir, file) for file in lidar_files]
-#         self.kpts = [np.load(os.path.join(kpt_dir, file))['keypoints'] for file in kpt_files]
-#         matches = [np.load(os.path.join(match_dir, file))['match'] for file in sorted(os.listdir(match_dir))]
-#         self.cam_poses = []
-#         self.cam_mappoints = []
-#         for i in range(1,len(image_files)+1):
-#             img_data = images[i]
-#             extrinsics = np.eye(4)
-#             extrinsics[:3,:3] = img_data.qvec2rotmat()
-#             extrinsics[:3,3] = img_data.tvec
-#             self.cam_poses.append(extrinsics)
-#             point3d_ids = img_data.point3D_ids
-#             point3d_valid_mask = np.nonzero(point3d_ids != -1)[0]
-#             point3d_ids = point3d_ids[point3d_valid_mask]
-#             mapppoints = np.stack([points3d[idx].xyz for idx in point3d_ids], axis=0)
-#             mapppoints = nptran(mapppoints, extrinsics)  # frame coordinate system
-#             self.cam_mappoints.append(mapppoints)
-#         pose_graph = o3d.io.read_pose_graph(lidar_pose)
-#         lidar_pose = [inv_pose_np(node.pose) for node in pose_graph.nodes]
-#         N = len(pose_graph.nodes)
-#         lidar_edge = [src_pose @ inv_pose_np(tgt_pose) for src_pose, tgt_pose in zip(lidar_pose[:-1], lidar_pose[1:])]
-#         camera_edge = [src_pose @ inv_pose_np(tgt_pose) for src_pose, tgt_pose in zip(self.cam_poses[:-1], self.cam_poses[1:])]
-#         camera_rotedge, lidar_rotedge = map(lambda edge_list:[T[:3,:3] for T in edge_list],[camera_edge, lidar_edge])
-#         ransac_state = dict(min_samples=3,
-#                                 max_trials=5000,
-#                                 stop_prob=0.99,
-#                                 random_state=0)
-#         ransac_rot_estimator = RotRANSAC(RotEstimator(),
-#                                 **ransac_state)
-#         alpha,beta = map(ransac_rot_estimator.toVecList,[camera_rotedge, lidar_rotedge])
-#         best_rot, rot_inlier_mask = ransac_rot_estimator.fit(beta,alpha)
-#         ransac_tsl_estimator = TslRANSAC(TslEstimator(best_rot),
-#                                      **ransac_state)
-#         inlier_camera_edge = [edge for i,edge in enumerate(camera_edge) if rot_inlier_mask[i]]
-#         inlier_lidar_edge = [edge for i,edge in enumerate(lidar_edge) if rot_inlier_mask[i]]
-#         camera_flatten = ransac_tsl_estimator.flatten(inlier_camera_edge)
-#         lidar_flatten = ransac_tsl_estimator.flatten(inlier_lidar_edge)
-#         _, best_scale, _ = ransac_tsl_estimator.fit(camera_flatten, lidar_flatten)
-#         self.scale = best_scale
-#         self.pair = json.load(open(pair_file, 'r'))
-#         self.pair_dict = dict()
-#         for i, pair in enumerate(self.pair):
-#             src_idx, tgt_idx = pair
-#             if tgt_idx - src_idx > max_frame_corr:
-#                 continue
-#             if src_idx not in self.pair_dict.keys():
-#                 self.pair_dict[src_idx] = []
-#             self.pair_dict[src_idx].append([tgt_idx, matches[i]])
-#             if tgt_idx not in self.pair_dict.keys():
-#                 self.pair_dict[tgt_idx] = []
-#             self.pair_dict[tgt_idx].append([src_idx, matches[i][:,::-1]])  # swap source and target
-#         self.img_tran = Tf.ToTensor()
-#         self.image_shape = [camera_data.height, camera_data.width]
-#         self.pcd_tran = KITTIFilter(**filter_params) if filter_params else lambda x:x
-#         self.resample_tran = Resampler(pcd_sample_num)
-#         self.camera_info = {
-#             "fx": fx,
-#             "fy": fy,
-#             "cx": cx,
-#             "cy": cy,
-#             "sensor_h": camera_data.height,
-#             "sensor_w": camera_data.width,
-#             "projection_mode": "perspective"
-#         }
-#         self.tensor_tran = lambda x:torch.from_numpy(x).to(torch.float32)
-#     def __len__(self):
-#         return len(self.img_files)
-
-#     def __getitem__(self, index:int):
-#         image = self.img_tran(Image.open(self.img_files[index]))
-#         pcd = np.load(self.lidar_files[index])
-#         pcd_rev = pcd[:,0] > 0
-#         pcd = self.pcd_tran(pcd[pcd_rev,:])
-#         pcd = self.resample_tran(pcd)  # (N, 3)
-#         match_list = []
-#         tgt_kpt_list = []
-#         src_extran = self.cam_poses[index]
-#         tgt_extran_list = []
-#         for tgt_idx, matches in self.pair_dict[index]:
-#             match_list.append(matches)
-#             tgt_kpt_list.append(self.kpts[tgt_idx])
-#             tgt_extran_list.append(self.cam_poses[tgt_idx])
-#         intran = np.array([[self.camera_info['fx'],0,self.camera_info['cx']],
-#                            [0,self.camera_info['fy'],self.camera_info['cy']],
-#                            [0,0,1]])
-#         image_hw = (self.camera_info['sensor_h'], self.camera_info['sensor_w'])
-#         cba_data = dict(src_pcd=pcd, src_kpt=self.kpts[index], tgt_kpt_list=tgt_kpt_list, match_list=match_list,
-#             src_extran=src_extran, tgt_extran_list=tgt_extran_list, intran=intran, scale=self.scale, img_hw=image_hw)
-#         ca_data = dict(cam_mappoint=self.cam_mappoints[index], pcd=pcd, scale=self.scale)
-#         return dict(img=image, pcd=self.tensor_tran(pcd.T), camera_info=self.camera_info, extran=self.tensor_tran(self.gt_Tcl), cba_data=cba_data, ca_data=ca_data)
-
- 
-# class PertubSeqKITTIDataset(Dataset):
-#     def __init__(self,dataset:BaseKITTIDataset,
-#                  max_deg:float,
-#                  max_tran:float,
-#                  mag_randomly=True,
-#                  ):
-#         self.dataset = dataset
-#         self.transform = transform.UniformTransformSE3(max_deg, max_tran, mag_randomly)
-
-#     def __len__(self):
-#         return len(self.dataset)
-    
-#     def __getitem__(self, index:Tuple[int, Sequence[int]]):
-#         group_idx, sub_indices = index
-#         igt_x = self.transform.generate_transform(1)  # (1, 6)
-#         gt = se3.exp(-igt_x).squeeze(0)
-#         igt = se3.exp(igt_x)
-#         img = []
-#         uncalib_pcd = []
-#         for sub_idx in sub_indices:
-#             data = self.dataset[(group_idx, sub_idx)]
-#             _uncalib_pcd = se3.transform(igt, data['pcd'].unsqueeze(0))  # (1, 3, N)
-#             img.append(data['img'])
-#             uncalib_pcd.append(_uncalib_pcd)
-#         new_data = dict(img=torch.stack(img, dim=0),uncalib_pcd=torch.cat(uncalib_pcd, dim=0), gt=gt, camera_info=data['camera_info'])
-#         return new_data
-    
-#     @staticmethod
-#     def collate_fn(zipped_x:Iterable[Dict[str, Union[torch.Tensor, Dict]]]):
-#         batch = dict()
-#         batch['img'] = torch.stack([x['img'] for x in zipped_x])
-#         batch['uncalib_pcd'] = torch.stack([x['uncalib_pcd'] for x in zipped_x])
-#         batch['gt'] = torch.stack([x['gt'] for x in zipped_x])
-#         batch['camera_info'] = zipped_x[0]['camera_info']
-#         return batch
-
-# class KITTISeqBatchSampler(BatchSampler):
-#     def __init__(self, num_sequences:int, len_of_sequences:Sequence[int], dataset_len:int, max_images:int=12,
-#             num_samples_per_seq:Tuple[int,int]=(2,6), continuous:bool=True):
-#         # Batch sampler with a dynamic number of sequences
-#         # max_images >= number_of_sequences * images_per_sequence
-#         assert num_sequences == len(len_of_sequences)
-#         self.max_images = max_images
-#         self.num_samples_per_seq = list(range(num_samples_per_seq[0],num_samples_per_seq[1]+1))
-#         self.num_sequences = num_sequences
-#         self.len_of_sequences = len_of_sequences
-#         self.dataset_len = dataset_len
-#         self.continuous = continuous
-
-#     def __iter__(self):
-#         for _ in range(self.dataset_len):
-#             # number per sequence
-#             num_sample = np.random.choice(self.num_samples_per_seq)
-#             num_seq = self.max_images // num_sample
-#             seq_idx = np.random.choice(self.num_sequences)
-#             batches = []
-#             for _ in range(num_seq):
-#                 if not self.continuous:
-#                     file_indices = np.random.choice(self.len_of_sequences[seq_idx], num_sample, replace=False)
-#                 else:
-#                     start_idx = np.random.choice(self.len_of_sequences[seq_idx] - num_sample)
-#                     file_indices = np.arange(start_idx, start_idx+num_sample)
-#                 batches.append((seq_idx, file_indices))
-#             yield batches
-
-#     def __len__(self):
-#         return self.dataset_len

@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.utils
 from torch.utils.data import DataLoader
-from dataset import BaseKITTIDataset, KITTIBatchSampler
+from dataset import BaseKITTIDataset, SeqBatchSampler
 from models.rggnet.vae import VanillaVAE as VAE
 from models.tools.core import DepthImgGenerator
 from models.lr_scheduler import get_lr_scheduler
@@ -29,8 +29,8 @@ def get_dataloader(train_base_dataset_argv:Dict, val_base_dataset_argv:Dict,
         train_dataloader_argv:Dict, val_dataloader_argv:Dict):
     train_base_dataset = BaseKITTIDataset(**train_base_dataset_argv)
     val_base_dataset = BaseKITTIDataset(**val_base_dataset_argv)
-    train_dataloader_argv['batch_sampler'] = KITTIBatchSampler(len(train_base_dataset.kitti_datalist), train_base_dataset.sep, **train_dataloader_argv['batch_sampler'])
-    val_dataloader_argv['batch_sampler'] = KITTIBatchSampler(len(val_base_dataset.kitti_datalist), val_base_dataset.sep, **val_dataloader_argv['batch_sampler'])
+    train_dataloader_argv['batch_sampler'] = SeqBatchSampler(len(train_base_dataset.kitti_datalist), train_base_dataset.sep, **train_dataloader_argv['batch_sampler'])
+    val_dataloader_argv['batch_sampler'] = SeqBatchSampler(len(val_base_dataset.kitti_datalist), val_base_dataset.sep, **val_dataloader_argv['batch_sampler'])
     if hasattr(train_base_dataset, 'collate_fn'):
         train_dataloader_argv['collate_fn'] = getattr(train_base_dataset, 'collate_fn')
     if hasattr(val_base_dataset, 'collate_fn'):

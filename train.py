@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import shutil
 import numpy as np
 import argparse
@@ -6,15 +7,16 @@ import torch
 import torch.nn as nn
 import torch.utils
 from torch.utils.data import DataLoader
-from dataset import BaseKITTIDataset, PerturbDataset, KITTIBatchSampler
+from dataset import __classdict__ as DatasetDict
+from dataset import PerturbDataset, SeqBatchSampler
 from models.denoiser import Surrogate, Denoiser, RGGDenoiser, RAFTDenoiser, __classdict__ as DenoiserDict
 from models.diffuser import Diffuser
-from models.lr_scheduler import get_lr_scheduler
+from models.lr_scheduler import get_lr_scheduler, get_optimizer
 from models.loss import get_loss, geodesic_loss
 from tqdm import tqdm
 import yaml
 from models.util import se3
-from core.logger import LogTracker
+from core.logger import LogTracker, fmt_time, print_warning
 from core.tools import load_checkpoint, save_checkpoint
 import logging
 from pathlib import Path
@@ -23,15 +25,16 @@ from typing import Dict, Union, Iterable
 # torch.backends.cudnn.benchmark = False
 # torch.backends.cudnn.deterministic = True
 
-def get_dataloader(train_base_dataset_argv:Dict, train_dataset_argv:Dict,
+def get_dataloader(dataset_type:str, train_base_dataset_argv:Dict, train_dataset_argv:Dict,
         val_base_dataset_argv:Dict, val_dataset_argv:Dict,
         train_dataloader_argv:Dict, val_dataloader_argv:Dict):
-    train_base_dataset = BaseKITTIDataset(**train_base_dataset_argv)
-    val_base_dataset = BaseKITTIDataset(**val_base_dataset_argv)
+    dataset_class = DatasetDict[dataset_type]
+    train_base_dataset = dataset_class(**train_base_dataset_argv)
+    val_base_dataset = dataset_class(**val_base_dataset_argv)
     train_dataset = PerturbDataset(train_base_dataset, **train_dataset_argv)
     val_dataset = PerturbDataset(val_base_dataset, **val_dataset_argv)
-    train_dataloader_argv['batch_sampler'] = KITTIBatchSampler(len(train_base_dataset.kitti_datalist), train_base_dataset.sep, **train_dataloader_argv['batch_sampler'])
-    val_dataloader_argv['batch_sampler'] = KITTIBatchSampler(len(val_base_dataset.kitti_datalist), val_base_dataset.sep, **val_dataloader_argv['batch_sampler'])
+    train_dataloader_argv['batch_sampler'] = SeqBatchSampler(*train_base_dataset.get_seq_params(), **train_dataloader_argv['batch_sampler'])
+    val_dataloader_argv['batch_sampler'] = SeqBatchSampler(*val_base_dataset.get_seq_params(),  **val_dataloader_argv['batch_sampler'])
     if hasattr(train_dataset, 'collate_fn'):
         train_dataloader_argv['collate_fn'] = getattr(train_dataset, 'collate_fn')
     if hasattr(val_dataset, 'collate_fn'):
@@ -68,7 +71,7 @@ def val_epoch(val_loader:DataLoader, diffuser:Diffuser, logger:logging.Logger, d
                 N_valid -= 1
                 iterator.set_postfix(state='nan')
                 iterator.update(1)
-                exit(1)
+                continue
             total_loss += loss
             tracker.update('R',R_loss.item())
             tracker.update('T',t_loss.item())
@@ -82,7 +85,18 @@ def val_epoch(val_loader:DataLoader, diffuser:Diffuser, logger:logging.Logger, d
 
 
 
-def main(config:Dict, config_path:Union[str, Iterable[str]]):
+def main(config:Dict, config_path:str):
+    run_argv = config['run']
+    path_argv = config['path']
+    experiment_dir = Path(path_argv['base_dir'])
+    experiment_dir.mkdir(exist_ok=True, parents=True)
+    experiment_dir = experiment_dir.joinpath(path_argv['name'])
+    experiment_dir.mkdir(exist_ok=True)
+    checkpoints_dir = experiment_dir.joinpath(path_argv['checkpoint'])
+    checkpoints_dir.mkdir(exist_ok=True)
+    log_dir = experiment_dir.joinpath(path_argv['log'])
+    log_dir.mkdir(exist_ok=True)
+    yaml.safe_dump(config, open(str(log_dir.joinpath(os.path.basename(config_path))),'w'))
     np.random.seed(config['seed'])
     torch.manual_seed(config['seed'])
     device = config['device']
@@ -98,30 +112,16 @@ def main(config:Dict, config_path:Union[str, Iterable[str]]):
     denoiser = denoiser_class(surrogate_model)
     diffuser = Diffuser(denoiser, **config['model']['diffuser'])
     dataset_argv = config['dataset']['train']
-    train_dataloader, val_dataloader = get_dataloader(dataset_argv['dataset']['train']['base'], dataset_argv['dataset']['train']['main'],
+    dataset_type = config['dataset']['type']
+    train_dataloader, val_dataloader = get_dataloader(dataset_type, dataset_argv['dataset']['train']['base'], dataset_argv['dataset']['train']['main'],
         dataset_argv['dataset']['val']['base'], dataset_argv['dataset']['val']['main'],
         dataset_argv['dataloader']['args'], dataset_argv['dataloader']['val_args'])
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, surrogate_model.parameters()), **config['optimizer']['args'])
+    optimizer = get_optimizer(filter(lambda p: p.requires_grad, surrogate_model.parameters()), config['optimizer']['type'], **config['optimizer']['args'])
     clip_grad = config['optimizer']['max_grad']
     scheduler = get_lr_scheduler(optimizer, config['scheduler']['type'], **config['scheduler']['args'])
     loss_func = get_loss(config['loss']['type'], **config['loss']['args'])
     diffuser.set_loss(loss_func)
     diffuser.set_new_noise_schedule(device)
-    run_argv = config['run']
-    path_argv = config['path']
-    experiment_dir = Path(path_argv['base_dir'])
-    experiment_dir.mkdir(exist_ok=True)
-    experiment_dir = experiment_dir.joinpath(path_argv['name'])
-    experiment_dir.mkdir(exist_ok=True)
-    checkpoints_dir = experiment_dir.joinpath(path_argv['checkpoint'])
-    checkpoints_dir.mkdir(exist_ok=True)
-    log_dir = experiment_dir.joinpath(path_argv['log'])
-    log_dir.mkdir(exist_ok=True)
-    if isinstance(config_path, str):
-        shutil.copyfile(config_path, str(log_dir.joinpath(os.path.basename(config_path))))  # copy the config file
-    else:
-        for path in config_path:
-            shutil.copyfile(path, str(log_dir.joinpath(os.path.basename(path))))  # copy the config file
     # logger
     steps = config['model']['diffuser']['sampling_argv']['steps']
     name = "{}_{}".format(diffuser.sampling_type, steps)
@@ -129,7 +129,7 @@ def main(config:Dict, config_path:Union[str, Iterable[str]]):
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger_mode = 'a' if path_argv['resume'] is not None else 'w'
-    file_handler = logging.FileHandler(str(log_dir) + '/train_{}.log'.format(name), mode=logger_mode)
+    file_handler = logging.FileHandler(str(log_dir) + '/train_{}_{}.log'.format(name,fmt_time()), mode=logger_mode)
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
@@ -203,9 +203,9 @@ def main(config:Dict, config_path:Union[str, Iterable[str]]):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_config', default="cfg/dataset/kitti_large.yml", type=str)
-    parser.add_argument("--model_config",type=str,default="cfg/unipc_model/projfusion.yml")
+    parser.add_argument("--model_config",type=str,default="cfg/unipc_model/main_v2.yml")
     args = parser.parse_args()
     dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
     config = yaml.load(open(args.model_config,'r'), yaml.SafeLoader)
     config.update(dataset_config)
-    main(config, [args.model_config, args.dataset_config])
+    main(config, args.model_config)
