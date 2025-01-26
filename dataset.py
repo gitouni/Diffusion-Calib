@@ -634,16 +634,16 @@ class NusceneDatasetSeqWrapper(Dataset):
 __classdict__ = {'kitti':BaseKITTIDataset, 'nuscenes':NuSceneDataset}
 DATASET_TYPE = TypeVar('DATASET_TYPE', BaseKITTIDataset, NuSceneDataset)
 if __name__ == "__main__":
-    # base_dataset = BaseKITTIDataset('data/kitti', seqs=['16','17','18'], skip_frame=1)
-    # dataset = PerturbDataset(base_dataset, 15, 0.15, True)
-    # print("dataset len:{}".format(len(base_dataset)))
-    # data = dataset[0]
-    # for key,value in data.items():
-    #     if hasattr(value, 'shape'):
-    #         shape = value.shape
-    #     else:
-    #         shape = value
-    #     print('{key}: {shape}'.format(key=key, shape=shape))
+    base_dataset = BaseKITTIDataset('data/kitti', seqs=['16','17','18'], skip_frame=1)
+    dataset = PerturbDataset(base_dataset, 15, 0.15, True)
+    print("dataset len:{}".format(len(base_dataset)))
+    data = dataset[0]
+    for key,value in data.items():
+        if hasattr(value, 'shape'):
+            shape = value.shape
+        else:
+            shape = value
+        print('{key}: {shape}'.format(key=key, shape=shape))
     base_dataset = NuSceneDataset()
     print("dataset len:{}".format(len(base_dataset)))
     data = base_dataset[0]

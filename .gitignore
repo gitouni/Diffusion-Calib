@@ -12,10 +12,17 @@ RANSAC/
 debug_cfg/
 debug/
 tmp/
+__pycache__
 **/__pycache__/
+**/build/
+**/dist/
+models/tools/csrc/build
+models/tools/csrc/csrc.egg-info
+models/tools/csrc/dist
+*.pyc
+*.so
+*.a
 data/*
-models/tools/__pycache__/
-models/tools/csrc/__pycache__/
 models/tools/csrc/build/
 models/tools/csrc/csrc.egg-info/
 models/tools/csrc/*.so
@@ -29,7 +36,7 @@ archieve/
 # experiments/large_ckpt
 # experiments/regular
 # experiments/surrogate
-**/build/
+
 metrics_cmp.py
 local_opt.py
 sploss.py
