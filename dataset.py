@@ -468,7 +468,7 @@ class LightNuscenes(NuScenes):
             print("Done reverse indexing in {:.1f} seconds.\n======".format(time.time() - start_time))
 
 class NuSceneDataset(Dataset):
-    def __init__(self, version='v1.0-trainval', dataroot='data/nuscenes/v1.0-full',
+    def __init__(self, version='v1.0-trainval', dataroot='data/nuscenes/',
             scene_names:Optional[Union[str,List[str]]]=None, daylight:bool=True,
             cam_sensor_name:Literal['CAM_FRONT','CAM_FRONT_RIGHT','CAM_BACK_RIGHT','CAM_BACK','CAM_BACK_LEFT','CAM_FRONT_LEFT']='CAM_FRONT',
             point_sensor_name:str='LIDAR_TOP', skip_point:int=1,

@@ -5,6 +5,15 @@ Official Implementation of Iterative Camera-Lidar Calibration via Surrogate Diff
 |---|---|---|
 |2.0.1|11.7|3.8.17|
 # Build Packages
+* Check TORCH_CUDA_ARCH_LIST:
+```bash
+python -c "import torch; print(torch.cuda.get_device_capability())"
+```
+The output can be `(8, 6)` to indicate 8.6.
+* Set `TORCH_CUDA_ARCH_LIST` to simplify compilation: (for example, 8.6)
+```bash
+export TORCH_CUDA_ARCH_LIST="8.6"
+```
 * Build csrc package for our method
 ```bash
 cd models/tools/csrc/
@@ -18,6 +27,18 @@ cp build/lib.linux-x86_64-cpython-38/* .
 ```bash
 cd models/lccnet/correlation_package/
 python setup.py install
+```
+* Install pointnet2_ops
+```bash
+pip install "git+https://github.com/erikwijmans/Pointnet2_PyTorch.git#egg=pointnet2_ops&subdirectory=pointnet2_ops_lib"
+```
+* Install GPU KNN
+```bash
+pip install --upgrade https://github.com/unlimblue/KNN_CUDA/releases/download/0.2/KNN_CUDA-0.2-py3-none-any.whl
+```
+* Third-party Libraries
+```bash
+pip install -r requirements.txt
 ```
 <details>
   <summary>Troubleshooting</summary>
