@@ -24,7 +24,7 @@ import os.path
 # import matplotlib.image as mpimg
 # from PIL import Image
 from typing import Literal, Tuple
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
+# os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
 # from .networks.submodules import *
 # from .networks.correlation_package.correlation import Correlation

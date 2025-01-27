@@ -8,7 +8,14 @@ import pandas as pd
 # from . import tools as Util
 from typing import Optional
 import json
+from time import strftime, localtime
 
+def fmt_time(fmt:str="%Y-%m-%d-%H-%M-%S") -> str:
+    return strftime(fmt, localtime())
+
+def print_warning(s:str, **argv):
+    print("\033[33;1m{}\033[0m".format(s), **argv)
+    
 class InfoLogger():
     """
     use logging to record log, only work on GPU 0 by judging global_rank

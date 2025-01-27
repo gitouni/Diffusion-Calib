@@ -146,7 +146,7 @@ class BaseNetwork(nn.Module):
 				if hasattr(m, 'init_weights'):
 					m.init_weights(self.init_type, self.gain)
 
-class Diffuser(BaseNetwork):
+class Diffuser(nn.Module):
 	def __init__(self, denoiser:Union[Denoiser,RAFTDenoiser,RGGDenoiser], beta_schedule:Dict, sampling_argv:Dict, sampling_type:Literal['dpm','unipc'], **kwargs):
 		"""Diffuser
 
@@ -222,7 +222,7 @@ class Diffuser(BaseNetwork):
 
 	def p_mean_variance(self, x_t:torch.Tensor, t:torch.Tensor, x_cond:torch.Tensor):
 		# sample_gammas = extract(self.gammas, t, x_shape=(1, 1)).to(x_t.device)
-		x_0_hat = self.x0_fn.forward(x_t, x_cond)  # x0 predictor
+		x_0_hat = self.x0_fn(x_t, x_cond)  # x0 predictor
 		model_mean, posterior_log_variance = self.q_posterior(
 			x_0_hat=x_0_hat, x_t=x_t, t=t)
 		return model_mean, posterior_log_variance
@@ -257,7 +257,7 @@ class Diffuser(BaseNetwork):
 	@torch.inference_mode()
 	def dpm_sampling(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict], return_intermediate:bool=False) -> torch.Tensor:
 		def model_fn(x_t:torch.Tensor, t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]):
-			out = self.x0_fn.forward(x_t, x_cond)
+			out = self.x0_fn(x_t, x_cond)
 			if self.seq_loss:
 				out = out[-1]
 			# If the model outputs both 'mean' and 'variance' (such as improved-DDPM and guided-diffusion),
@@ -298,7 +298,7 @@ class Diffuser(BaseNetwork):
 	@torch.inference_mode()
 	def unipc_sampling(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict], return_intermediate:bool=False) -> torch.Tensor:
 		def model_fn(x_t:torch.Tensor, t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]):
-			out = self.x0_fn.forward(x_t, x_cond)
+			out = self.x0_fn(x_t, x_cond)
 			if self.seq_loss:
 				out = out[-1]
 			# If the model outputs both 'mean' and 'variance' (such as improved-DDPM and guided-diffusion),
@@ -342,7 +342,7 @@ class Diffuser(BaseNetwork):
 	def dpm_sampling_guidance(self, x_T:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict],
 			classifier_fn_argv:Dict, classifer_fn:Callable, return_intermediate:bool=False) -> torch.Tensor:
 		def model_fn(x_t:torch.Tensor, t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]):
-			out = self.x0_fn.forward(x_t, x_cond)
+			out = self.x0_fn(x_t, x_cond)
 			# If the model outputs both 'mean' and 'variance' (such as improved-DDPM and guided-diffusion),
 			# We only use the 'mean' output for DPM-Solver, because DPM-Solver is based on diffusion ODEs.
 			return out
@@ -390,7 +390,7 @@ class Diffuser(BaseNetwork):
 			classifier_grad_place_holder:Optional[Iterable]=None, return_intermediate:bool=False) -> torch.Tensor:
 		# x_cond: img, pcd, Tcl, camera_info
 		def model_fn(x_t:torch.Tensor, t:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]):
-			out = self.x0_fn.forward(x_t, x_cond)
+			out = self.x0_fn(x_t, x_cond)
 			# If the model outputs both 'mean' and 'variance' (such as improved-DDPM and guided-diffusion),
 			# We only use the 'mean' output for DPM-Solver, because DPM-Solver is based on diffusion ODEs.
 			return out
@@ -455,19 +455,24 @@ class Diffuser(BaseNetwork):
 		noise = default(noise, torch.zeros_like(x_0))  # x_T = 0
 		x_t = self.q_sample(
 			x_0=x_0, sample_gammas=sample_gammas.view(b,1), noise=noise)
-		x_0_hat = self.x0_fn.forward(x_t, x_cond)  # img, pcd, init_Tcl, camera_info
+		x_0_hat = self.x0_fn(x_t, x_cond)  # img, pcd, init_Tcl, camera_info
 		loss = self.loss_fn(x_0_hat, x_0)
 		if self.seq_loss:
 			x_0_hat = x_0_hat[-1]
 		return loss, x_0_hat
 
-class SE3Diffuser:
+class SE3Diffuser(nn.Module):
 	def __init__(self, surrogate:Surrogate, train_scheduler_argv:Dict, val_scheduler_argv:Dict):
+		super().__init__()
 		self.model = surrogate
 		self.train_scheduler = DiffusionScheduler(train_scheduler_argv)
 		self.train_scheduler_argv = train_scheduler_argv
 		self.val_scheduler = DiffusionScheduler(val_scheduler_argv)
 		self.val_scheduler_argv = val_scheduler_argv
+		if isinstance(surrogate, LCCRAFT):
+			self.seq_loss = True
+		else:
+			self.seq_loss = False
 
 	def set_loss(self, loss_fn):
 		self.loss_fn = loss_fn
@@ -481,7 +486,7 @@ class SE3Diffuser:
 		self.model.restore_buffer(img, pcd)
 		for t in range(self.val_scheduler_argv['n_diff_steps']+1, 1, -1):  # [T, T-1, ..., 1]
 			pred_x = self.model(img, pcd, H_t @ Tcl, camera_info)
-			if not isinstance(pred_x, torch.Tensor):
+			if isinstance(pred_x, (tuple, list)):
 				pred_x = pred_x[-1]
 			delta_H_t = se3.exp(pred_x)  # (B, 4, 4) H_t_to_0
 			H_0 = delta_H_t @ H_t
@@ -505,15 +510,15 @@ class SE3Diffuser:
 		else:
 			return H_t
 	
-	def forward(self, H_0:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, Dict]):
+	def forward(self, H_0:torch.Tensor, x_cond:Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]):
 		img, pcd, Tcl, camera_info = x_cond
 		B = img.shape[0]
 		H_T = torch.eye(4).unsqueeze(0).expand(B, -1, -1).to(H_0)
 		B = H_0.shape[0]
+		x0 = se3.log(H_0)
 		taus = self.train_scheduler.uniform_sample_t(B)
 		alpha_bars = self.train_scheduler.alpha_bars[taus].to(H_0).unsqueeze(1)  # [B, 1]
 		H_t = se3.exp((1. - torch.sqrt(alpha_bars)) * se3.log(H_T @ inv_pose(H_0))) @ H_0
-
 		### add noise
 		if self.train_scheduler_argv['add_noise']:
 			scale = torch.cat([torch.ones(3) * self.train_scheduler_argv['sigma_r'], torch.ones(3) * self.train_scheduler_argv['sigma_t']]).unsqueeze(0).to(H_0)  # [1, 6]
@@ -523,20 +528,11 @@ class SE3Diffuser:
 		else:
 			H_t_noise = H_t
 		pred_x = self.model(img, pcd,  H_t_noise @ Tcl, camera_info)
-		if not self.seq_loss:
-			pred_se3 = se3.exp(pred_x) @ H_t_noise
-			R_loss, t_loss = geodesic_loss(pred_se3, H_0)
-		else:
-			pred_se3 = [se3.exp(x) @ H_t_noise for x in pred_x]
-			R_loss = 0
-			t_loss = 0
-			gamma = 1
-			for pred in pred_se3:
-				R_loss_i, t_loss_i = geodesic_loss(pred, H_0)
-				R_loss += R_loss_i * gamma
-				t_loss += t_loss_i * gamma
-				gamma *= 0.8
-		return R_loss, t_loss
+		if isinstance(pred_x, (tuple, list)):
+			pred_x = pred_x[-1]
+		x0_hat = se3.log(se3.exp(pred_x) @ H_t_noise)
+		loss = self.loss_fn(x0_hat, x0)
+		return loss, x0_hat
 
 class GuidanceSampler:
 	def __init__(self, loss_fn:Callable, cba_data:Dict, ca_data:Dict, cba_argv:Dict, ca_argv:Dict):

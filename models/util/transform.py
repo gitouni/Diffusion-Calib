@@ -16,6 +16,11 @@ def inv_pose_np(pose_mat:np.ndarray):
     inv_pose_mat[...,:3,[3]] = -inv_pose_mat[...,:3,:3] @ pose_mat[...,:3,[3]]
     return inv_pose_mat
 
+def nptran(pcd:np.ndarray, rigdtran:np.ndarray) -> np.ndarray:
+    pcd_ = pcd.copy().T  # (N, 3) -> (3, N)
+    pcd_ = rigdtran[:3, :3] @ pcd_ + rigdtran[:3, [3]]
+    return pcd_.T
+
 class RandomTransformSE3:
     """ rigid motion """
     def __init__(self, max_deg, max_tran, mag_randomly=True, concat=False):
