@@ -1,0 +1,18 @@
+name: nlsd
+diffuser:
+  train:
+    schedule_type: cosine
+    n_diff_steps: 200
+    beta_1: 1.0E-4
+    beta_T: 0.05
+    sigma_r: 0.05
+    sigma_t: 0.03
+    add_noise: true
+  val:
+    schedule_type: cosine
+    n_diff_steps: 10
+    beta_1: 0.2
+    beta_T: 0.8
+    sigma_r: 0.1
+    sigma_t: 0.01
+    add_noise: true

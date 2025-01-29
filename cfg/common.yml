@@ -1,0 +1,32 @@
+seed: 0
+device: cuda:0
+path:
+  base_dir: experiments/{dataset}/{mode}/{model}
+  log: log
+  results: results
+  checkpoint: checkpoint
+  resume: null
+  pretrain: experiments/{dataset}/{mode}/{model}/checkpoint/best_model.pth
+
+loss:
+  type: mse
+  args:
+    reduction: mean
+
+optimizer:
+  type: prodigy 
+  args:
+    betas: [0.9, 0.999]
+    weight_decay: 1.0E-2
+    decouple: true
+  max_grad: 1.0
+
+scheduler:
+  type: cosine
+  args:
+    T_max: &n_epoch 30
+
+run:
+  n_epoch: *n_epoch
+  val_per_epoch: 5
+  log_per_iter: 16

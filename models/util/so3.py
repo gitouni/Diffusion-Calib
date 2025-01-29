@@ -135,7 +135,7 @@ def group_prod(g, h):
 
 
 
-def vecs_Xg_ig(x):
+def vecs_Xg_ig(x:torch.Tensor):
     """ Vi = vec(dg/dxi * inv(g)), where g = exp(x)
         (== [Ad(exp(x))] * vecs_ig_Xg(x))
     """
@@ -152,7 +152,7 @@ def vecs_Xg_ig(x):
 
     return V.view(*(x.size()[0:-1]), 3, 3)
 
-def inv_vecs_Xg_ig(x):
+def inv_vecs_Xg_ig(x:torch.Tensor):
     """ H = inv(vecs_Xg_ig(x)) """
     t = x.view(-1, 3).norm(p=2, dim=1).view(-1, 1, 1)
     X = mat(x)

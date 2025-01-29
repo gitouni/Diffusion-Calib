@@ -24,3 +24,4 @@ easydict
 #torchinfo==1.8.0
 #torchvision==0.14.1
 tqdm
+prodigyopt

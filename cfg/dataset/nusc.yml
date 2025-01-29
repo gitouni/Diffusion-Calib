@@ -1,3 +1,4 @@
+name: nuscenes
 dataset:
   type: nuscenes
   common_args: &dataset_common_args

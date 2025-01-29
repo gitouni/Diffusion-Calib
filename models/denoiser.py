@@ -1,5 +1,5 @@
 from .tools.core import FusionNet, FusionNetDepthOnly, FusionNetProjectOnly, get_activation_func
-from .tools.core import FusionNetV2
+# from .tools.core import FusionNetV2
 from .util import se3
 # from .util.seq_utils import transformer_encoder_wrapper
 import torch.nn as nn
@@ -241,31 +241,31 @@ class ResAggregation(nn.Module):
         x_tsl = self.tsl_fc(torch.flatten(x_tsl, start_dim=1))
         return torch.cat([x_rot, x_tsl], dim=1)
 
-class ProjFusionNetV2(Surrogate):
-    def __init__(self, activation:Literal['leakyrelu','relu','elu','gelu'], inplace:bool, encoder_argv:Dict, aggregation_argv:Dict,
-            proj_features:bool=True, depth_features:bool=True) -> None:
-        super().__init__()
-        assert proj_features or depth_features, 'at least either should be true.'
-        activation_func = get_activation_func(activation, inplace)
-        if proj_features and depth_features:
-            fusion_class = FusionNetV2
-        elif not proj_features:
-            fusion_class = FusionNetDepthOnly
-        else:
-            fusion_class = FusionNetProjectOnly
-        self.encoder = fusion_class(**encoder_argv)
-        self.mlp = ResAggregation(inplanes=self.encoder.out_dim, activation_fn=activation_func, **aggregation_argv)
+# class ProjFusionNetV2(Surrogate):
+#     def __init__(self, activation:Literal['leakyrelu','relu','elu','gelu'], inplace:bool, encoder_argv:Dict, aggregation_argv:Dict,
+#             proj_features:bool=True, depth_features:bool=True) -> None:
+#         super().__init__()
+#         assert proj_features or depth_features, 'at least either should be true.'
+#         activation_func = get_activation_func(activation, inplace)
+#         if proj_features and depth_features:
+#             fusion_class = FusionNetV2
+#         elif not proj_features:
+#             fusion_class = FusionNetDepthOnly
+#         else:
+#             fusion_class = FusionNetProjectOnly
+#         self.encoder = fusion_class(**encoder_argv)
+#         self.mlp = ResAggregation(inplanes=self.encoder.out_dim, activation_fn=activation_func, **aggregation_argv)
 
-    def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
-        feat = self.encoder(img, pcd, Tcl, camera_info)  # (B, D)
-        x0 = self.mlp(feat)
-        return x0  # (B, x_dim)
+#     def forward(self, img:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
+#         feat = self.encoder(img, pcd, Tcl, camera_info)  # (B, D)
+#         x0 = self.mlp(feat)
+#         return x0  # (B, x_dim)
     
-    def restore_buffer(self, img:torch.Tensor, pcd:torch.Tensor):
-        self.encoder.restore_buffer(img, pcd)
+#     def restore_buffer(self, img:torch.Tensor, pcd:torch.Tensor):
+#         self.encoder.restore_buffer(img, pcd)
 
-    def clear_buffer(self):
-        self.encoder.clear_buffer()
+#     def clear_buffer(self):
+#         self.encoder.clear_buffer()
 
 class ProjFusionNet(Surrogate):
     def __init__(self, activation:Literal['leakyrelu','relu','elu','gelu'], inplace:bool, encoder_argv:Dict, aggregation_argv:Dict,

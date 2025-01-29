@@ -1,3 +1,4 @@
+name: kitti
 dataset:
   type: kitti
   common_args: &dataset_common_args

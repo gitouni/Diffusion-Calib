@@ -1,0 +1,16 @@
+name: lccnet
+surrogate:
+  type: LCCNet
+  argv:
+    lccnet_argv:
+      image_size: [256, 512]
+      use_feat_from: 1
+      md: 4
+      use_reflectance: false
+      dropout: 0.0
+      Action_Func: leakyrelu
+      attention: false
+      res_num: 18
+    pcd2depth_argv:
+      pooling_size: 1
+      max_depth: 50.0

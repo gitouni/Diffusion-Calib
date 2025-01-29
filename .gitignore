@@ -3,15 +3,12 @@
 *.pth
 *.pyc
 *.txt
-cfg/*.yml
-cfg/model
-cfg/sd_model
 log/
 fig/
 RANSAC/
 debug_cfg/
-debug/
-tmp/
+debug/**
+tmp/**
 __pycache__
 **/__pycache__/
 **/build/
@@ -22,7 +19,7 @@ models/tools/csrc/dist
 *.pyc
 *.so
 *.a
-data/*
+data/**
 models/tools/csrc/build/
 models/tools/csrc/csrc.egg-info/
 models/tools/csrc/*.so

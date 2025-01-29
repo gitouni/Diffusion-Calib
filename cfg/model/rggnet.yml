@@ -1,0 +1,24 @@
+name: rggnet
+surrogate:
+  type: RGGNet
+  argv:
+    rggnet_argv:
+      vae_path: pretrained/kitti_vae.pth
+      vae_argv:
+        img_size: [256, 512]
+        in_chan: 4
+        latent_dim: 100
+        hidden_dims: [64, 128, 64, 32]
+        activation: leakyrelu
+        inplace: true
+      resnet_depth: 18
+      resnet_pretrained: true
+      mlp_head_dims: [512, 128]
+      mlp_sub_dims: [128]
+      activation: relu
+      inplace: true
+    pcd2depth_argv:
+      pooling_size: 1
+      max_depth: 50.0
+    kld_weight: 1.0E-6
+    ELBO_weight: 1.0E-2

@@ -1,0 +1,18 @@
+name: lsd
+diffuser:
+  beta_schedule:
+    schedule: cosine
+    n_timestep: 1000
+    linear_start: 1.0E-4
+    linear_end: 0.02
+  sampling_type: dpm
+  sampling_argv:
+    steps: 10
+    order: 3
+    skip_type: logSNR
+    method: multistep
+    lower_order_final: false
+    denoise_to_zero: false
+    solver_type: dpmsolver
+    atol: 0.005
+    rtol: 0.05

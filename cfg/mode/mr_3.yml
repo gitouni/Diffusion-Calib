@@ -1,0 +1,44 @@
+name: mr_3
+stages:
+  - replace_args:
+      - name: 
+          ['dataset','train','dataset','train','main']
+        value:
+          max_deg: 15
+          max_tran: 0.15
+          mag_randomly: true
+      - name: 
+          ['dataset','train','dataset','val','main']
+        value:
+          max_deg: 15
+          max_tran: 0.15
+          mag_randomly: true
+    pretrain: best_stage_0.pth
+  - replace_args:
+      - name: 
+          ['dataset','train','dataset','train','main']
+        value:
+          max_deg: 10
+          max_tran: 0.10
+          mag_randomly: true
+      - name: 
+          ['dataset','train','dataset','val','main']
+        value:
+          max_deg: 10
+          max_tran: 0.10
+          mag_randomly: true
+    pretrain: best_stage_1.pth
+  - replace_args:
+      - name: 
+          ['dataset','train','dataset','train','main']
+        value:
+          max_deg: 5
+          max_tran: 0.05
+          mag_randomly: true
+      - name: 
+          ['dataset','train','dataset','val','main']
+        value:
+          max_deg: 5
+          max_tran: 0.05
+          mag_randomly: true
+    pretrain: best_stage_2.pth

@@ -23,6 +23,7 @@ python setup.py install
 ```bash
 cp build/lib.linux-x86_64-cpython-38/* .
 ```
+Note: lib.linux-x86_64-cpython-38 can vary for other versions of cpython.
 * Build correlation_cuda package for LCCNet
 ```bash
 cd models/lccnet/correlation_package/

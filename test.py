@@ -210,20 +210,20 @@ def main(config:Dict, model_type:Literal['diffusion','iterative'], iters:int):
     np.random.seed(config['seed'])
     torch.manual_seed(config['seed'])
     device = config['device']
-    surrogate_model:Surrogate = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
-    denoiser_class = RAFTDenoiser if config['model']['surrogate']['type'] == 'LCCRAFT' else Denoiser
+    surrogate_model:Surrogate = DenoiserDict[config['surrogate']['type']](**config['surrogate']['argv']).to(device)
+    denoiser_class = RAFTDenoiser if config['surrogate']['type'] == 'LCCRAFT' else Denoiser
     denoiser = denoiser_class(surrogate_model)
     dataset_argv = config['dataset']['test']
     dataset_type = config['dataset']['type']
     name_list, dataloader_list = get_dataloader(dataset_argv['dataset'], dataset_argv['dataloader'], dataset_type)
     if model_type == 'diffusion':
-        diffuser = Diffuser(denoiser, **config['model']['diffuser'])
+        diffuser = Diffuser(denoiser, **config['diffuser'])
         loss_func = get_loss(config['loss']['type'], **config['loss']['args'])
         diffuser.set_loss(loss_func)
         diffuser.set_new_noise_schedule(device)
     run_argv = config['run']
     path_argv = config['path']
-    experiment_dir = Path(path_argv['base_dir']).joinpath(path_argv['name'])
+    experiment_dir = Path(path_argv['base_dir'])
     experiment_dir.mkdir(exist_ok=True, parents=True)
     log_dir = experiment_dir.joinpath(path_argv['log'])
     log_dir.mkdir(exist_ok=True)
@@ -232,7 +232,7 @@ def main(config:Dict, model_type:Literal['diffusion','iterative'], iters:int):
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger_mode = 'w'
-    steps = config['model']['diffuser']['sampling_argv']['steps'] if 'diffusion' in model_type else iters
+    steps = config['diffuser']['sampling_argv']['steps'] if 'diffusion' in model_type else iters
     if model_type == 'diffusion':
         name = "{}_{}".format(diffuser.sampling_type, steps)
     else:
@@ -278,8 +278,8 @@ def main(config:Dict, model_type:Literal['diffusion','iterative'], iters:int):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', default="experiments/nuscenes/iter/main/log/main.yml", type=str)
-    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='iterative')
+    parser.add_argument('--config', default="experiments/kitti/lsd/calibnet/log/kitti_lsd_calibnet.yml", type=str)
+    parser.add_argument('--model_type',type=str, choices=['diffusion','iterative'], default='diffusion')
     parser.add_argument("--iters",type=int,default=10)
     args = parser.parse_args()
     config = yaml.load(open(args.config,'r'), yaml.SafeLoader)

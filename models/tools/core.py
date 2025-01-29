@@ -9,7 +9,6 @@ from .point_conv import PointConv
 from .mlp import MLP1d
 from .utils import project_pc2image, build_pc_pyramid_single, se3_transform
 from .csrc import correlation2d
-from ..pointgpt import load_pointgpt
 from .clfm import FusionAwareInterp
 from ..Modules import resnet18 as custom_resnet
 from ..Modules import BottleneckBlock, ResidualBlock, FeatureEncoder
@@ -393,90 +392,90 @@ class FusionNet(nn.Module):
     #     return torch.cat(aggregated_feats, dim=-1)  # (B, K, C1 + C2 + C3 + C4)
 
 
-class FusionNetV2(nn.Module):
-    def __init__(self,
-                # encoder 2d
-                resnet_depth:Literal[18, 34, 50, 101, 152],
-                resnet_pretrained:bool,
-                resnet_frozen:bool,
-                # projection_net
-                max_depth:float,
-                proj_planes:int,
-                # encoder 3d
-                pointgpt_config:str,
-                pointgpt_checkpoint:str,
-                pointgpt_frozen:bool,
-                # Interploation Fusion net
-                fusion_knn:int=4
-                ):
-        super().__init__()
-        self.fnet_2d = Encoder2D(resnet_depth, pretrained=resnet_pretrained, resnet_frozen=resnet_frozen)
-        self.fnet_3d, self.fnet_3d_max_depth = load_pointgpt(pointgpt_config, pointgpt_checkpoint)
-        if pointgpt_frozen:
-            self.fnet_3d.requires_grad_(False)
-        self.depth_gen = DepthImgGenerator(pooling_size=1, max_depth=max_depth)
-        self.fnet_proj = custom_resnet(inplanes=1, planes=proj_planes)
-        self.fusion = FusionAwareInterp(self.fnet_3d.encoder_dims, k = fusion_knn, norm='batch_norm')
-        planes = self.fnet_2d.out_chans[-1] + self.fnet_3d.encoder_dims + self.fnet_proj.out_chans[-1]
-        self.out_dim = planes
-        self.feat_buffer = dict()
+# class FusionNetV2(nn.Module):
+#     def __init__(self,
+#                 # encoder 2d
+#                 resnet_depth:Literal[18, 34, 50, 101, 152],
+#                 resnet_pretrained:bool,
+#                 resnet_frozen:bool,
+#                 # projection_net
+#                 max_depth:float,
+#                 proj_planes:int,
+#                 # encoder 3d
+#                 pointgpt_config:str,
+#                 pointgpt_checkpoint:str,
+#                 pointgpt_frozen:bool,
+#                 # Interploation Fusion net
+#                 fusion_knn:int=4
+#                 ):
+#         super().__init__()
+#         self.fnet_2d = Encoder2D(resnet_depth, pretrained=resnet_pretrained, resnet_frozen=resnet_frozen)
+#         self.fnet_3d, self.fnet_3d_max_depth = load_pointgpt(pointgpt_config, pointgpt_checkpoint)
+#         if pointgpt_frozen:
+#             self.fnet_3d.requires_grad_(False)
+#         self.depth_gen = DepthImgGenerator(pooling_size=1, max_depth=max_depth)
+#         self.fnet_proj = custom_resnet(inplanes=1, planes=proj_planes)
+#         self.fusion = FusionAwareInterp(self.fnet_3d.encoder_dims, k = fusion_knn, norm='batch_norm')
+#         planes = self.fnet_2d.out_chans[-1] + self.fnet_3d.encoder_dims + self.fnet_proj.out_chans[-1]
+#         self.out_dim = planes
+#         self.feat_buffer = dict()
     
-    def clear_buffer(self):
-        self.feat_buffer.clear()
+#     def clear_buffer(self):
+#         self.feat_buffer.clear()
 
-    @torch.inference_mode()
-    def cache_features(self, image:torch.Tensor, pcd:torch.Tensor):
-        feat_2d = self.fnet_2d(image)[-1]
-        pcd_T = pcd.transpose(-1,-2).contiguous()  # B, N, 3
-        xyz, feat_3d = self.fnet_3d.extraction(pcd_T / self.fnet_3d_max_depth)  # feat_3d: B, K, D
-        feat_3d = feat_3d.transpose(-1,-2).contiguous()  # B, K, D -> B, D, K
-        xyz = xyz.transpose(-1,-2).contiguous() # xyz: B, 3, K
-        return dict(feat_2d=feat_2d,
-                    feat_3d=feat_3d,
-                    xyz=xyz)  # without gradient
+#     @torch.inference_mode()
+#     def cache_features(self, image:torch.Tensor, pcd:torch.Tensor):
+#         feat_2d = self.fnet_2d(image)[-1]
+#         pcd_T = pcd.transpose(-1,-2).contiguous()  # B, N, 3
+#         xyz, feat_3d = self.fnet_3d.extraction(pcd_T / self.fnet_3d_max_depth)  # feat_3d: B, K, D
+#         feat_3d = feat_3d.transpose(-1,-2).contiguous()  # B, K, D -> B, D, K
+#         xyz = xyz.transpose(-1,-2).contiguous() # xyz: B, 3, K
+#         return dict(feat_2d=feat_2d,
+#                     feat_3d=feat_3d,
+#                     xyz=xyz)  # without gradient
     
-    def restore_buffer(self, image:torch.Tensor, pcd:torch.Tensor):
-        data:Dict[str, torch.Tensor] = self.cache_features(image, pcd)
-        self.feat_buffer.update(data)
+#     def restore_buffer(self, image:torch.Tensor, pcd:torch.Tensor):
+#         data:Dict[str, torch.Tensor] = self.cache_features(image, pcd)
+#         self.feat_buffer.update(data)
     
-    def forward(self, image:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
-        """fusion net embedding
+#     def forward(self, image:torch.Tensor, pcd:torch.Tensor, Tcl:torch.Tensor, camera_info:Dict):
+#         """fusion net embedding
 
-        Args:
-            image (torch.Tensor): B, C, H, W
-            pcd (torch.Tensor): B, D, N
-            Tcl (torch.Tensor): B, 4, 4
-            camera_info (Dict): intran information for projection
+#         Args:
+#             image (torch.Tensor): B, C, H, W
+#             pcd (torch.Tensor): B, D, N
+#             Tcl (torch.Tensor): B, 4, 4
+#             camera_info (Dict): intran information for projection
 
-        Returns:
-            torch.Tensor: unique features for each query (Tcl)
-        """
-        if len(self.feat_buffer.keys()) == 0:
-            cache = self.cache_features(image, pcd)
-            feat_2d, feat_3d, xyz = cache['feat_2d'], cache['feat_3d'], cache['xyz']
-        else:
-            feat_2d, feat_3d, xyz = self.feat_buffer['feat_2d'], self.feat_buffer['feat_3d'], self.feat_buffer['xyz']
-        # B = image.shape[0]
-        sensor_h, sensor_w = camera_info['sensor_h'], camera_info['sensor_w']
-        xyz_tf = se3_transform(Tcl, xyz)  # (B, 3, N) -> (B, 3, N)
-        depth_img = self.depth_gen.project(xyz_tf, camera_info)
-        feat_proj = self.fnet_proj(depth_img)[-1]
-        feat_camera_info = camera_info.copy()
-        feat_w, feat_h = feat_2d.shape[-1], feat_2d.shape[-2]
-        kx = feat_w / sensor_w
-        ky = feat_h / sensor_h
-        feat_camera_info.update({
-            'sensor_w': feat_w,
-            'sensor_h': feat_h,
-            'fx': kx * camera_info['fx'],
-            'fy': ky * camera_info['fy'],
-            'cx': kx * camera_info['cx'],
-            'cy': kx * camera_info['cy']
-        })
-        uv = project_pc2image(xyz_tf, feat_camera_info)  # (B, 2, N)
-        interp_2d = self.fusion(uv, feat_2d.shape, feat_3d)  # (B, C, H, W)
-        fused_2d = torch.cat([feat_2d, interp_2d, feat_proj], dim=1)  # 512 + 256 + 256
-        return fused_2d  # (B, C, h, w)
+#         Returns:
+#             torch.Tensor: unique features for each query (Tcl)
+#         """
+#         if len(self.feat_buffer.keys()) == 0:
+#             cache = self.cache_features(image, pcd)
+#             feat_2d, feat_3d, xyz = cache['feat_2d'], cache['feat_3d'], cache['xyz']
+#         else:
+#             feat_2d, feat_3d, xyz = self.feat_buffer['feat_2d'], self.feat_buffer['feat_3d'], self.feat_buffer['xyz']
+#         # B = image.shape[0]
+#         sensor_h, sensor_w = camera_info['sensor_h'], camera_info['sensor_w']
+#         xyz_tf = se3_transform(Tcl, xyz)  # (B, 3, N) -> (B, 3, N)
+#         depth_img = self.depth_gen.project(xyz_tf, camera_info)
+#         feat_proj = self.fnet_proj(depth_img)[-1]
+#         feat_camera_info = camera_info.copy()
+#         feat_w, feat_h = feat_2d.shape[-1], feat_2d.shape[-2]
+#         kx = feat_w / sensor_w
+#         ky = feat_h / sensor_h
+#         feat_camera_info.update({
+#             'sensor_w': feat_w,
+#             'sensor_h': feat_h,
+#             'fx': kx * camera_info['fx'],
+#             'fy': ky * camera_info['fy'],
+#             'cx': kx * camera_info['cx'],
+#             'cy': kx * camera_info['cy']
+#         })
+#         uv = project_pc2image(xyz_tf, feat_camera_info)  # (B, 2, N)
+#         interp_2d = self.fusion(uv, feat_2d.shape, feat_3d)  # (B, C, H, W)
+#         fused_2d = torch.cat([feat_2d, interp_2d, feat_proj], dim=1)  # 512 + 256 + 256
+#         return fused_2d  # (B, C, h, w)
 
 class FusionNetDepthOnly(nn.Module):
     def __init__(self, resnet_depth:Literal[18, 34, 50, 101, 152],

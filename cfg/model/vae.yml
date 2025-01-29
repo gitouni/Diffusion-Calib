@@ -1,0 +1,13 @@
+name: vae
+vae:
+  argv:
+    img_size: [256, 512]
+    in_chan: 4
+    latent_dim: 100
+    hidden_dims: [64, 128, 64, 32]
+    activation: leakyrelu
+    inplace: true
+  kld_weight: 1.0E-6
+  depthgen_argv:
+    pooling_size: 1
+    max_depth: 50.0

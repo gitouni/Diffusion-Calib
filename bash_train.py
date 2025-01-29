@@ -1,11 +1,13 @@
 import subprocess
 
 if __name__ == "__main__":
-    script_paths = ['train.py','train_surrogate.py','train_naive.py']
-    python_path = '/home/bit/anaconda3/envs/pytorch/bin/python'
-    dataset_config = 'cfg/dataset/nusc.yml'
-    model_configs = ['cfg/lsd_model/main.yml','cfg/sd_model/main_sd.yml']
-    # model_configs = ['cfg/sd_model/rggnet_sd.yml','cfg/sd_model/calibnet_sd.yml','cfg/sd_model/lccnet_sd.yml','cfg/sd_model/lccraft_large_sd.yml','cfg/sd_model/lccraft_small_sd.yml']
-    for script_path, model_config in zip(script_paths, model_configs):
-        process = subprocess.Popen([python_path, script_path,'--dataset_config',dataset_config,'--model_config',model_config])
+    script_path = 'train_mr.py'
+    python_path = '/home/ouni/miniconda3/envs/relposepp/bin/python'
+    dataset_config = 'cfg/dataset/kitti_large.yml'
+    mode_config = 'cfg/mode/mr_3.yml'
+    common_config = 'cfg/common.yml'
+    model_configs = ['cfg/model/calibnet.yml', 'cfg/model/lccnet.yml', 'cfg/model/rggnet.yml', 'cfg/model/lccraft_small.yml','cfg/model/lccraft_large.yml']
+    # model_configs = ['cfg/model/lccraft_small.yml','cfg/model/lccraft_large.yml']
+    for model_config in model_configs:
+        process = subprocess.Popen([python_path, script_path,'--dataset_config', dataset_config,'--model_config', model_config, '--common_config', common_config, '--mode_config', mode_config])
         process.wait()  # must be serialized

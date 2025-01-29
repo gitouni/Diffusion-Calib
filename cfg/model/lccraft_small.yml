@@ -1,0 +1,25 @@
+name: lccraft_small
+surrogate:
+  type: LCCRAFT
+  argv:
+    lccraft_argv:
+      feature_encoder_layers: [64, 64, 128, 192, 256]
+      feature_encoder_block: bottleneck
+      feature_encoder_norm_layer: instancenorm
+      context_encoder_layers: [64, 64, 128, 192, 256]
+      context_encoder_block: bottleneck
+      context_encoder_norm_layer: null
+      corr_block_num_levels: 4
+      corr_block_radius: 3
+      motion_encoder_corr_layers: [96]
+      motion_encoder_flow_layers: [64, 32]
+      motion_encoder_out_channels: 82
+      recurrent_block_hidden_state_size: 96
+      recurrent_block_kernel_size: [3,3]
+      recurrent_block_padding: [1,1]
+      flow_head_hidden_size: 128
+      depth_gen_pooling_size: 1
+      depth_gen_max_depth: 50.0
+      feat_poooling_size: [2,4]
+      fps_num: 1024
+    num_iters: 5

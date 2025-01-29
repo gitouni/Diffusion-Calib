@@ -8,12 +8,12 @@ import torch.utils
 from torch.utils.data import DataLoader
 from models.denoiser import RGGNet, LCCRAFT, __classdict__ as DenoiserDict, SURROGATE_TYPE
 from dataset import PerturbDataset, SeqBatchSampler, __classdict__ as DatasetDict, DATASET_TYPE
-from models.lr_scheduler import get_lr_scheduler
+from models.lr_scheduler import get_lr_scheduler, get_optimizer
 from models.loss import get_loss, geodesic_loss
 from tqdm import tqdm
 import yaml
 from models.util import se3
-from core.logger import LogTracker
+from core.logger import LogTracker, fmt_time, print_warning
 from core.tools import load_checkpoint, save_checkpoint
 import logging
 from pathlib import Path
@@ -58,17 +58,17 @@ def val_epoch(val_loader:DataLoader, surrogate:SURROGATE_TYPE, logger:logging.Lo
             camera_info = batch['camera_info']
             delta_x = surrogate(img, pcd, init_extran, camera_info)
             if isinstance(surrogate, LCCRAFT):
-                loss = loss_fn(se3.log(delta_x[-1]), gt_log)
-                R_loss, t_loss = geodesic_loss(delta_x[-1], gt_se3)
+                delta_x = delta_x[-1]
+                loss = surrogate.sequence_loss([delta_x], gt_log, loss_fn)
             else:
-                pred_se3 = se3.exp(delta_x)
-                R_loss, t_loss = geodesic_loss(pred_se3, gt_se3)
                 loss = loss_fn(delta_x, gt_log)
+            pred_se3 = se3.exp(delta_x)
+            R_loss, t_loss = geodesic_loss(pred_se3, gt_se3)
             if torch.isnan(R_loss).sum() + torch.isnan(t_loss) + torch.isnan(loss) > 0:
                 logger.warning("nan detected, end validation.")
                 iterator.set_postfix(state='nan')
                 iterator.update(1)
-                exit(-1)
+                continue
             total_loss += loss
             tracker.update('R',R_loss.item())
             tracker.update('T',t_loss.item())
@@ -81,45 +81,42 @@ def val_epoch(val_loader:DataLoader, surrogate:SURROGATE_TYPE, logger:logging.Lo
     return total_loss / N_valid
 
 
-
-def main(config:Dict, config_path:Union[str, Iterable[str]], stage:int):
+def main(config:Dict, config_path:str, stage:int):
+    run_argv = config['run']
+    path_argv = config['path']
+    experiment_dir = Path(path_argv['base_dir'])
+    experiment_dir.mkdir(exist_ok=True, parents=True)
+    checkpoints_dir = experiment_dir.joinpath(path_argv['checkpoint'])
+    checkpoints_dir.mkdir(exist_ok=True)
+    log_dir = experiment_dir.joinpath(path_argv['log'])
+    log_dir.mkdir(exist_ok=True)
+    save_yaml_path = str(log_dir.joinpath(os.path.basename(config_path)))
+    yaml.safe_dump(config, open(save_yaml_path,'w'))
+    print_warning("config file saved to {}.".format(save_yaml_path))
+    exit(0)
     np.random.seed(config['seed'])
     torch.manual_seed(config['seed'])
     device = config['device']
     # torch.backends.cudnn.benchmark=True
     # torch.backends.cudnn.enabled = False
-    surrogate:SURROGATE_TYPE = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
-    range_argv = config['stages'][stage]
+    surrogate:SURROGATE_TYPE = DenoiserDict[config['surrogate']['type']](**config['surrogate']['argv']).to(device)
     dataset_argv = config['dataset']['train']
-    train_dataloader, val_dataloader = get_dataloader(dataset_argv['dataset']['train']['base'], dataset_argv['dataset']['train']['main'],
+    dataset_type = config['dataset']['type']
+    train_dataloader, val_dataloader = get_dataloader(dataset_type, dataset_argv['dataset']['train']['base'], dataset_argv['dataset']['train']['main'],
         dataset_argv['dataset']['val']['base'], dataset_argv['dataset']['val']['main'],
-        dataset_argv['dataloader']['args'], dataset_argv['dataloader']['val_args'], range_argv)
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, surrogate.parameters()), **config['optimizer']['args'])
+        dataset_argv['dataloader']['args'], dataset_argv['dataloader']['val_args'])
+    optimizer = get_optimizer(filter(lambda p: p.requires_grad, surrogate.parameters()), config['optimizer']['type'], **config['optimizer']['args'])
     clip_grad = config['optimizer']['max_grad']
     scheduler = get_lr_scheduler(optimizer, config['scheduler']['type'], **config['scheduler']['args'])
     loss_func = get_loss(config['loss']['type'], **config['loss']['args'])
-    run_argv = config['run']
-    path_argv = config['path']
-    experiment_dir = Path(path_argv['base_dir'])
-    experiment_dir.mkdir(exist_ok=True)
-    experiment_dir = experiment_dir.joinpath(path_argv['name'])
-    experiment_dir.mkdir(exist_ok=True)
-    checkpoints_dir = experiment_dir.joinpath(path_argv['checkpoint'])
-    checkpoints_dir.mkdir(exist_ok=True)
-    log_dir = experiment_dir.joinpath(path_argv['log'])
-    log_dir.mkdir(exist_ok=True)
-    if isinstance(config_path, str):
-        shutil.copyfile(config_path, str(log_dir.joinpath(os.path.basename(config_path))))  # copy the config file
-    else:
-        for path in config_path:
-            shutil.copyfile(path, str(log_dir.joinpath(os.path.basename(path))))  # copy the config file
+    
     # logger
     name = "stage_{}".format(stage)
-    logger = logging.getLogger("{}_stage_{}".format(config['model']['surrogate']['type'], stage))
+    logger = logging.getLogger("{}_stage_{}".format(config['surrogate']['type'], stage))
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger_mode = 'a' if path_argv['resume'] is not None else 'w'
-    file_handler = logging.FileHandler(str(log_dir) + '/train_{}.log'.format(name), mode=logger_mode)
+    file_handler = logging.FileHandler(str(log_dir) + '/train_{}_{}.log'.format(name, fmt_time()), mode=logger_mode)
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
@@ -210,14 +207,37 @@ def main(config:Dict, config_path:Union[str, Iterable[str]], stage:int):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_config', type=str, default="cfg/dataset/kitti_large.yml")
-    parser.add_argument("--model_config",type=str, default="cfg/multirange_model/lccraft_small.yml")
-    parser.add_argument("--multirange_config",type=str, default="cfg/dataset/mr_5.yml")
-    parser.add_argument("--stage",type=int,default=5)
+    parser.add_argument('--dataset_config', default="cfg/dataset/kitti_large.yml", type=str)
+    parser.add_argument("--model_config",type=str,default="cfg/model/calibnet.yml")
+    parser.add_argument("--common_config",type=str,default="cfg/common.yml")
+    parser.add_argument("--mode_config",type=str,default="cfg/mode/mr_3.yml")
+    parser.add_argument("--stage",type=int,default=0)
     args = parser.parse_args()
-    dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
-    multirange_config = yaml.load(open(args.multirange_config, 'r'), yaml.SafeLoader)
-    config = yaml.load(open(args.model_config,'r'), yaml.SafeLoader)
-    config.update(multirange_config)
+    dataset_config:Dict = yaml.safe_load(open(args.dataset_config,'r'))
+    model_config:Dict = yaml.safe_load(open(args.model_config,'r'))
+    mode_config:Dict = yaml.safe_load(open(args.mode_config,'r'))
+    dataset_name = dataset_config['name']
+    model_name = model_config['name']
+    mode_name = mode_config['name']
+    dataset_config.pop('name')
+    model_config.pop('name')
+    mode_config.pop('name')
+    config:Dict = yaml.safe_load(open(args.common_config,'r'))
+    config['path']['base_dir'] = config['path']['base_dir'].format(dataset=dataset_name, model=model_name, mode=mode_name)
+    config['path']['pretrain'] = config['path']['pretrain'].format(dataset=dataset_name, model=model_name, mode=mode_name)
     config.update(dataset_config)
-    main(config, [args.model_config, args.dataset_config], args.stage)
+    config.update(model_config)
+    range_argv = mode_config['stages'][args.stage]
+    if 'replace_args' in range_argv:
+        for items in range_argv['replace_args']:
+            sub_config = config
+            for sub_name in items['name']:
+                sub_config = sub_config[sub_name]  # pointer copy
+            sub_config.update(**items['value'])
+    if 'pretrain' in range_argv:
+        pretrained_path = os.path.dirname(config['path']['pretrain'])
+        config['path']['pretrain'] = list()
+        for stage_argv in mode_config['stages']:
+            config['path']['pretrain'].append(os.path.join(pretrained_path, stage_argv['pretrain']))
+    config.update(mode_config)
+    main(config, '{}_{}_{}.yml'.format(dataset_name, mode_name, model_name), args.stage)

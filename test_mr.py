@@ -16,7 +16,7 @@ from core.logger import LogTracker
 from core.tools import load_checkpoint_model_only
 import logging
 from pathlib import Path
-from typing import Dict, Literal, Iterable, List
+from typing import Dict, Iterable, List
 from core.tools import Timer
 
 def get_dataloader(test_dataset_argv:Iterable[Dict], test_dataloader_argv:Dict, dataset_type:str):
@@ -97,7 +97,7 @@ def test_multirange(test_loader:DataLoader, name:str, model_list:List[Surrogate]
     assert N_valid > 0, "Fatal Error, no valid batch!"
     return tracker.result(), N_valid / len(test_loader)
 
-def main(config:Dict, config_path:str):
+def main(config:Dict):
     np.random.seed(config['seed'])
     torch.manual_seed(config['seed'])
     device = config['device']
@@ -108,16 +108,13 @@ def main(config:Dict, config_path:str):
     steps = len(config['stages'])
     name = "mr_{}".format(steps)
     experiment_dir = Path(path_argv['base_dir'])
-    experiment_dir.mkdir(exist_ok=True)
-    experiment_dir = experiment_dir.joinpath(path_argv['name'])
-    experiment_dir.mkdir(exist_ok=True)
+    experiment_dir.mkdir(exist_ok=True, parents=True)
     experiment_dir = experiment_dir.joinpath(dataset_type)
     experiment_dir.mkdir(exist_ok=True)
     checkpoints_dir = experiment_dir.joinpath(path_argv['checkpoint'])
     checkpoints_dir.mkdir(exist_ok=True)
     log_dir = experiment_dir.joinpath(path_argv['log'])
     log_dir.mkdir(exist_ok=True)
-    shutil.copyfile(config_path, str(log_dir.joinpath(os.path.basename(config_path))))  # copy the config file
     res_dir = experiment_dir.joinpath(path_argv['results']).joinpath(name)
     if res_dir.exists():
         shutil.rmtree(str(res_dir))
@@ -138,7 +135,7 @@ def main(config:Dict, config_path:str):
     model_list = []
     assert path_argv['pretrain'] is not None, 'pretrained path must be assigned during test time.'
     for pretrained_path in path_argv['pretrain']:
-        surrogate_model:Surrogate = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
+        surrogate_model:Surrogate = DenoiserDict[config['surrogate']['type']](**config['surrogate']['argv']).to(device)
         load_checkpoint_model_only(pretrained_path, surrogate_model)
         model_list.append(surrogate_model)
         logger.info("Loaded checkpoint from {}".format(pretrained_path))
@@ -160,13 +157,7 @@ def main(config:Dict, config_path:str):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_config', type=str, default="cfg/dataset/kitti_large.yml")
-    parser.add_argument("--model_config",type=str, default="cfg/multirange_model/lccraft_small.yml")
-    parser.add_argument("--multirange_config",type=str, default="cfg/dataset/mr_5.yml")
+    parser.add_argument('--config', type=str, default="experiments/kitti/mr_3/calibnet/log/kitti_mr_3_calibnet.yml")
     args = parser.parse_args()
-    dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
-    multirange_config = yaml.load(open(args.multirange_config, 'r'), yaml.SafeLoader)
-    config = yaml.load(open(args.model_config,'r'), yaml.SafeLoader)
-    config.update(multirange_config)
-    config.update(dataset_config)
-    main(config, args.model_config)
+    config = yaml.safe_load(open(args.config, 'r'))
+    main(config)

@@ -85,32 +85,32 @@ def val_epoch(val_loader:DataLoader, diffuser:Diffuser, logger:logging.Logger, d
 
 
 
-def main(config:Dict, config_path:str):
+def main(config:Dict, config_filename:str):
     run_argv = config['run']
     path_argv = config['path']
     experiment_dir = Path(path_argv['base_dir'])
     experiment_dir.mkdir(exist_ok=True, parents=True)
-    experiment_dir = experiment_dir.joinpath(path_argv['name'])
-    experiment_dir.mkdir(exist_ok=True)
     checkpoints_dir = experiment_dir.joinpath(path_argv['checkpoint'])
     checkpoints_dir.mkdir(exist_ok=True)
     log_dir = experiment_dir.joinpath(path_argv['log'])
     log_dir.mkdir(exist_ok=True)
-    yaml.safe_dump(config, open(str(log_dir.joinpath(os.path.basename(config_path))),'w'))
+    save_yaml_path = str(log_dir.joinpath(config_filename))
+    yaml.safe_dump(config, open(save_yaml_path,'w'))
+    print_warning("config file saved to {}.".format(save_yaml_path))
     np.random.seed(config['seed'])
     torch.manual_seed(config['seed'])
     device = config['device']
     # torch.backends.cudnn.benchmark=True
     # torch.backends.cudnn.enabled = False
-    surrogate_model:Surrogate = DenoiserDict[config['model']['surrogate']['type']](**config['model']['surrogate']['argv']).to(device)
-    if config['model']['surrogate']['type'] == 'LCCRAFT':
+    surrogate_model:Surrogate = DenoiserDict[config['surrogate']['type']](**config['surrogate']['argv']).to(device)
+    if config['surrogate']['type'] == 'LCCRAFT':
         denoiser_class = RAFTDenoiser
-    elif config['model']['surrogate']['type'] == 'RGGNet':
+    elif config['surrogate']['type'] == 'RGGNet':
         denoiser_class = RGGDenoiser
     else:
         denoiser_class = Denoiser
     denoiser = denoiser_class(surrogate_model)
-    diffuser = Diffuser(denoiser, **config['model']['diffuser'])
+    diffuser = Diffuser(denoiser, **config['diffuser'])
     dataset_argv = config['dataset']['train']
     dataset_type = config['dataset']['type']
     train_dataloader, val_dataloader = get_dataloader(dataset_type, dataset_argv['dataset']['train']['base'], dataset_argv['dataset']['train']['main'],
@@ -123,7 +123,7 @@ def main(config:Dict, config_path:str):
     diffuser.set_loss(loss_func)
     diffuser.set_new_noise_schedule(device)
     # logger
-    steps = config['model']['diffuser']['sampling_argv']['steps']
+    steps = config['diffuser']['sampling_argv']['steps']
     name = "{}_{}".format(diffuser.sampling_type, steps)
     logger = logging.getLogger(path_argv['log'])
     logger.setLevel(logging.INFO)
@@ -133,7 +133,7 @@ def main(config:Dict, config_path:str):
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
-    logger.info('start traing')
+    logger.info('start trainging')
     logger.info('args:')
     logger.info(args)
     if path_argv['resume'] is not None:
@@ -203,9 +203,23 @@ def main(config:Dict, config_path:str):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_config', default="cfg/dataset/kitti_large.yml", type=str)
-    parser.add_argument("--model_config",type=str,default="cfg/unipc_model/main.yml")
+    parser.add_argument("--model_config",type=str,default="cfg/model/calibnet.yml")
+    parser.add_argument("--common_config",type=str,default="cfg/common.yml")
+    parser.add_argument("--mode_config",type=str,default="cfg/mode/lsd.yml")
     args = parser.parse_args()
-    dataset_config = yaml.load(open(args.dataset_config,'r'), yaml.SafeLoader)
-    config = yaml.load(open(args.model_config,'r'), yaml.SafeLoader)
+    dataset_config:Dict = yaml.safe_load(open(args.dataset_config,'r'))
+    model_config:Dict = yaml.safe_load(open(args.model_config,'r'))
+    mode_config:Dict = yaml.safe_load(open(args.mode_config,'r'))
+    dataset_name = dataset_config['name']
+    model_name = model_config['name']
+    mode_name = mode_config['name']
+    dataset_config.pop('name')
+    model_config.pop('name')
+    mode_config.pop('name')
+    config:Dict = yaml.safe_load(open(args.common_config,'r'))
+    config['path']['base_dir'] = config['path']['base_dir'].format(dataset=dataset_name, model=model_name, mode=mode_name)
+    config['path']['pretrain'] = config['path']['pretrain'].format(dataset=dataset_name, model=model_name, mode=mode_name)
     config.update(dataset_config)
-    main(config, args.model_config)
+    config.update(model_config)
+    config.update(mode_config)
+    main(config, '{}_{}_{}.yml'.format(dataset_name, mode_name, model_name))
