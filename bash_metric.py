@@ -2,14 +2,17 @@ import subprocess
 
 if __name__ == "__main__":
     python_file = 'metrics.py'
-    pred_dir_fmt = "experiments/large/{method}/kitti/results/{filefolder}"
     gt_dir = "cache/kitti_gt"
-    log_file_fmt = "log/large/{savefile}.json"
+    log_file_fmt = "log/large/{method}_{suffix}.json"
     method_list = ['calibnet','rggnet','lccnet','lccraft_small','lccraft_large','main']
-    iterative_list = ['iterative_1','iterative_10','unipc_10','se3_diffusion_10']
-    suffix_list = ['','_iter','_unipc','_sd']
-    for method in method_list:
-        for iterative, suffix in zip(iterative_list, suffix_list):
+    iterative_list = ['single','naiter','lsd','nlsd']
+    suffix_list = ['_sig','_iter','_lsd','_nlsd']
+    pred_dirs = [
+        []
+        ]
+
+    for j, method in enumerate(method_list):
+        for i, (iterative, suffix) in enumerate(zip(iterative_list, suffix_list)):
             print("Inference {} + {}".format(method, iterative))
             pred_dir = pred_dir_fmt.format(method=method, filefolder=iterative)
             log_file = log_file_fmt.format(savefile=method+suffix)

@@ -12,7 +12,7 @@ from models.loss import se3_err
 from tqdm import tqdm
 import yaml
 from models.util import se3
-from core.logger import LogTracker
+from core.logger import LogTracker, fmt_time
 from core.tools import load_checkpoint_model_only
 import logging
 from pathlib import Path
@@ -106,11 +106,9 @@ def main(config:Dict):
     dataset_argv = config['dataset']['test']
     dataset_type = config['dataset']['type']
     steps = len(config['stages'])
-    name = "mr_{}".format(steps)
+    name = "mr_{}_{}".format(steps, fmt_time())
     experiment_dir = Path(path_argv['base_dir'])
     experiment_dir.mkdir(exist_ok=True, parents=True)
-    experiment_dir = experiment_dir.joinpath(dataset_type)
-    experiment_dir.mkdir(exist_ok=True)
     checkpoints_dir = experiment_dir.joinpath(path_argv['checkpoint'])
     checkpoints_dir.mkdir(exist_ok=True)
     log_dir = experiment_dir.joinpath(path_argv['log'])
@@ -119,7 +117,6 @@ def main(config:Dict):
     if res_dir.exists():
         shutil.rmtree(str(res_dir))
     res_dir.mkdir(exist_ok=True,parents=True)
-    
     # logger
     logger = logging.getLogger(path_argv['log'])
     logger.setLevel(logging.INFO)
