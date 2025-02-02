@@ -39,14 +39,19 @@ if __name__ == "__main__":
         process = subprocess.Popen([python_path, script_path, '--config',cfg])
         process.wait()  # must be serialized
     # MR
-    script_path = 'test_mr.py'
-    configs = ['experiments/kitti/mr_3/calibnet/log/kitti_mr_3_calibnet.yml',
-                'experiments/kitti/mr_3/lccnet/log/kitti_mr_3_lccnet.yml',
-                'experiments/kitti/mr_3/rggnet/log/kitti_mr_3_rggnet.yml',
-                'experiments/kitti/mr_3/lccraft_small/log/kitti_mr_3_lccraft_small.yml',
-                'experiments/kitti/mr_3/lccraft_large/log/kitti_mr_3_lccraft_large.yml']
-    for cfg in configs:
-        process = subprocess.Popen([python_path, script_path, '--config',cfg])
-        process.wait()  # must be serialized
+    # script_path = 'test_mr.py'
+    # # configs = ['experiments/kitti/mr_3/calibnet/log/kitti_mr_3_calibnet.yml',
+    # #             'experiments/kitti/mr_3/lccnet/log/kitti_mr_3_lccnet.yml',
+    # #             'experiments/kitti/mr_3/rggnet/log/kitti_mr_3_rggnet.yml',
+    # #             'experiments/kitti/mr_3/lccraft_small/log/kitti_mr_3_lccraft_small.yml',
+    # #             'experiments/kitti/mr_3/lccraft_large/log/kitti_mr_3_lccraft_large.yml']
+    # configs = [
+    #             'experiments/kitti/mr_3/lccnet/log/kitti_mr_3_lccnet.yml',
+    #             'experiments/kitti/mr_3/rggnet/log/kitti_mr_3_rggnet.yml',
+    #             'experiments/kitti/mr_3/lccraft_small/log/kitti_mr_3_lccraft_small.yml',
+    #             'experiments/kitti/mr_3/lccraft_large/log/kitti_mr_3_lccraft_large.yml']
+    # for cfg in configs:
+    #     process = subprocess.Popen([python_path, script_path, '--config',cfg])
+    #     process.wait()  # must be serialized
     
     

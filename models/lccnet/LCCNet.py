@@ -6,11 +6,8 @@ Modified version (LCCNet) by Xudong Lv
 """
 
 import torch
-from torchvision.models import (ResNet, resnet18, resnet34, resnet50, resnet101, resnet152,
-                ResNet18_Weights, ResNet34_Weights, ResNet50_Weights, ResNet101_Weights, ResNet152_Weights)
 import numpy as np
 from torch.autograd import Variable
-import torchvision.models as models
 # import torch.utils.model_zoo as model_zoo
 #from models.CMRNet.modules.attention import *
 import torch.nn as nn
@@ -23,13 +20,13 @@ import os.path
 # import matplotlib.pyplot as plt
 # import matplotlib.image as mpimg
 # from PIL import Image
-from typing import Literal, Tuple
+from typing import Literal, Tuple, Dict
 # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
 # from .networks.submodules import *
 # from .networks.correlation_package.correlation import Correlation
 from .correlation_package.correlation import Correlation
-
+from ..tools.core import ResnetEncoder
 
 # __all__ = [
 #     'calib_net'
@@ -187,64 +184,24 @@ def predict_flow(in_planes):
 def deconv(in_planes, out_planes, kernel_size=4, stride=2, padding=1):
     return nn.ConvTranspose2d(in_planes, out_planes, kernel_size, stride, padding, bias=True)
 
-
-class ResnetEncoder(nn.Module):
-    """Pytorch module for a resnet encoder
-    """
-    def __init__(self, num_layers:Literal[18, 34, 50, 101, 152], pretrained:bool):
-        super(ResnetEncoder, self).__init__()
-
-        self.num_ch_enc = np.array([64, 64, 128, 256, 512])
-
-        resnets = {18: (resnet18, ResNet18_Weights.DEFAULT),
-                   34: (resnet34, ResNet34_Weights.DEFAULT),
-                   50: (resnet50, ResNet50_Weights.DEFAULT),
-                   101: (resnet101, ResNet101_Weights.DEFAULT),
-                   152: (resnet152, ResNet152_Weights.DEFAULT)}
-
-        if num_layers not in resnets:
-            raise ValueError("{} is not a valid number of resnet layers".format(num_layers))
-
-        func, weights = resnets[num_layers]
-        if not pretrained:
-            weights = None
-        self.encoder:ResNet = func(weights=weights)
-
-        if num_layers > 34:
-            self.num_ch_enc[1:] *= 4
-
-    def forward(self, x:torch.Tensor):
-        features = []
-        x = self.encoder.conv1(x)
-        x = self.encoder.bn1(x)
-        features.append(self.encoder.relu(x))
-        # self.features.append(self.encoder.layer1(self.encoder.maxpool(self.features[-1])))
-        features.append(self.encoder.maxpool(features[-1]))
-        features.append(self.encoder.layer1(features[-1]))
-        features.append(self.encoder.layer2(features[-1]))
-        features.append(self.encoder.layer3(features[-1]))
-        features.append(self.encoder.layer4(features[-1]))
-        return features
-
-
 class LCCNet(nn.Module):
     """
     Based on the PWC-DC net. add resnet encoder, dilation convolution and densenet connections
     """
 
-    def __init__(self, image_size:Tuple[int,int], use_feat_from=1, md=4, use_reflectance=False, dropout=0.0,
-                 Action_Func:Literal['leakyrelu','relu','elu']='leakyrelu', attention=False, res_num:Literal[18, 50]=18):
+    def __init__(self, resnet_argv:Dict, image_size:Tuple[int,int], use_feat_from=1, md=4, use_reflectance=False, dropout=0.0,
+                 Action_Func:Literal['leakyrelu','relu','elu']='leakyrelu', attention=False):
         """
         input: md --- maximum displacement (for correlation. default: 4), after warpping
         """
         super(LCCNet, self).__init__()
         input_lidar = 1
-        self.res_num = res_num
+        self.res_num = resnet_argv['num_layers']
         self.use_feat_from = use_feat_from
         if use_reflectance:
             input_lidar = 2
 
-        self.net_encoder = ResnetEncoder(num_layers=self.res_num, pretrained=True)
+        self.net_encoder = ResnetEncoder(**resnet_argv)
 
         # resnet with leakyRELU
         if Action_Func == 'leakyrelu':
@@ -382,6 +339,8 @@ class LCCNet(nn.Module):
                 nn.init.kaiming_normal_(m.weight.data, mode='fan_in')
                 if m.bias is not None:
                     m.bias.data.zero_()
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight.data, 0.1)
         self.buffer = dict()
 
     # def _make_layer(self, block, planes, blocks, stride=1):
@@ -435,9 +394,9 @@ class LCCNet(nn.Module):
         vgrid[:, 1, :, :] = 2.0 * vgrid[:, 1, :, :].clone() / max(H - 1, 1) - 1.0
 
         vgrid = vgrid.permute(0, 2, 3, 1)
-        output = nn.functional.grid_sample(x, vgrid)
+        output = nn.functional.grid_sample(x, vgrid, align_corners=False)
         mask = torch.autograd.Variable(torch.ones(x.size())).cuda()
-        mask = nn.functional.grid_sample(mask, vgrid)
+        mask = nn.functional.grid_sample(mask, vgrid, align_corners=False)
 
         # if W==128:
         # np.save('mask.npy', mask.cpu().data.numpy())

@@ -11,8 +11,10 @@ surrogate:
         hidden_dims: [64, 128, 64, 32]
         activation: leakyrelu
         inplace: true
-      resnet_depth: 18
-      resnet_pretrained: true
+      resnet_argv:
+        num_layers: 18
+        pretrained: true
+        frozen: false
       mlp_head_dims: [512, 128]
       mlp_sub_dims: [128]
       activation: relu

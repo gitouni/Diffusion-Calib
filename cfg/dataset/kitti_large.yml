@@ -7,7 +7,7 @@ dataset:
     meta_json: 'data_len.json'
     skip_frame: 1
     voxel_size: null
-    min_dist: 0.1
+    min_dist: 0.03
     skip_point: 1
     pcd_sample_num: 40000
     resize_size: [256, 512]
@@ -33,7 +33,7 @@ dataset:
           mag_randomly: true
     dataloader:
       common_args: &dataloader_common_args
-        num_workers: 8
+        num_workers: 4
         pin_memory: true
       args:
         batch_sampler:

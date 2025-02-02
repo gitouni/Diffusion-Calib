@@ -203,7 +203,7 @@ def main(config:Dict, config_filename:str):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_config', default="cfg/dataset/kitti_large.yml", type=str)
-    parser.add_argument("--model_config",type=str,default="cfg/model/calibnet.yml")
+    parser.add_argument("--model_config",type=str,default="cfg/model/lccnet.yml")
     parser.add_argument("--common_config",type=str,default="cfg/common.yml")
     parser.add_argument("--mode_config",type=str,default="cfg/mode/lsd.yml")
     args = parser.parse_args()

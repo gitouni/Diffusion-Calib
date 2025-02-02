@@ -133,7 +133,7 @@ class BasicBlock(nn.Module):
 class ResnetEncoder(nn.Module):
     """Pytorch module for a resnet encoder
     """
-    def __init__(self, num_layers:Literal[18, 34, 50, 101, 152], pretrained:bool):
+    def __init__(self, num_layers:Literal[18, 34, 50, 101, 152], pretrained:bool, frozen:bool=False):
         super(ResnetEncoder, self).__init__()
 
         self.num_ch_enc = np.array([64, 64, 128, 256, 512])
@@ -154,6 +154,8 @@ class ResnetEncoder(nn.Module):
 
         if num_layers > 34:
             self.num_ch_enc[1:] *= 4
+        if frozen:
+            self.encoder.requires_grad_(False)
 
     def forward(self, x):
         features = []

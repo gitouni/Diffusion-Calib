@@ -93,7 +93,6 @@ def main(config:Dict, config_path:str, stage:int):
     save_yaml_path = str(log_dir.joinpath(os.path.basename(config_path)))
     yaml.safe_dump(config, open(save_yaml_path,'w'))
     print_warning("config file saved to {}.".format(save_yaml_path))
-    exit(0)
     np.random.seed(config['seed'])
     torch.manual_seed(config['seed'])
     device = config['device']
@@ -208,7 +207,7 @@ def main(config:Dict, config_path:str, stage:int):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_config', default="cfg/dataset/kitti_large.yml", type=str)
-    parser.add_argument("--model_config",type=str,default="cfg/model/calibnet.yml")
+    parser.add_argument("--model_config",type=str,default="cfg/model/lccnet.yml")
     parser.add_argument("--common_config",type=str,default="cfg/common.yml")
     parser.add_argument("--mode_config",type=str,default="cfg/mode/mr_3.yml")
     parser.add_argument("--stage",type=int,default=0)

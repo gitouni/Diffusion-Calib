@@ -1,57 +1,17 @@
 import torch.nn as nn
 import torch
-from torchvision.models import (ResNet, resnet18, resnet34, resnet50, resnet101, resnet152,
-                ResNet18_Weights, ResNet34_Weights, ResNet50_Weights, ResNet101_Weights, ResNet152_Weights)
-from typing import Literal, Dict, List, Tuple
-import numpy as np
+from typing import Literal, Dict, List
+
 from ..Modules import resnet18 as custom_resnet18
 from ..tools.core import MLPNet, get_activation_func
 from .vae import VanillaVAE as VAE
+from ..tools.core import ResnetEncoder
 
-class ResnetEncoder(nn.Module):
-    """Pytorch module for a resnet encoder
-    """
-    def __init__(self, num_layers:Literal[18, 34, 50, 101, 152], pretrained:bool):
-        super().__init__()
-
-        self.num_ch_enc = np.array([64, 64, 128, 256, 512])
-
-        resnets = {18: (resnet18, ResNet18_Weights.DEFAULT),
-                   34: (resnet34, ResNet34_Weights.DEFAULT),
-                   50: (resnet50, ResNet50_Weights.DEFAULT),
-                   101: (resnet101, ResNet101_Weights.DEFAULT),
-                   152: (resnet152, ResNet152_Weights.DEFAULT)}
-
-        if num_layers not in resnets:
-            raise ValueError("{} is not a valid number of resnet layers".format(num_layers))
-
-        func, weights = resnets[num_layers]
-        if not pretrained:
-            weights = None
-        self.encoder:ResNet = func(weights=weights)
-
-        if num_layers > 34:
-            self.num_ch_enc[1:] *= 4
-
-    def forward(self, x:torch.Tensor):
-        features = []
-        x = self.encoder.conv1(x)
-        x = self.encoder.bn1(x)
-        features.append(self.encoder.relu(x))
-        # self.features.append(self.encoder.layer1(self.encoder.maxpool(self.features[-1])))
-        features.append(self.encoder.maxpool(features[-1]))
-        features.append(self.encoder.layer1(features[-1]))
-        features.append(self.encoder.layer2(features[-1]))
-        features.append(self.encoder.layer3(features[-1]))
-        features.append(self.encoder.layer4(features[-1]))
-        return features
-    
 class RGGNet(nn.Module):
     def __init__(self,
             vae_path:str,
             vae_argv:Dict,
-            resnet_depth:Literal[18, 34, 50, 101, 152]=18,
-            resnet_pretrained:bool=True,
+            resnet_argv:Dict,
             mlp_head_dims:List[int]=[512],
             mlp_sub_dims:List[int]=[512],
             activation:Literal['leakyrelu','relu','elu','gelu']='leakyrelu',
@@ -62,12 +22,19 @@ class RGGNet(nn.Module):
         self.vae.load_state_dict(torch.load(vae_path, map_location='cpu')['model'])
         self.vae.requires_grad_(False)
         activation_fn = get_activation_func(activation, inplace)
-        self.img_encoder = ResnetEncoder(resnet_depth, resnet_pretrained)
+        self.img_encoder = ResnetEncoder(**resnet_argv)
         self.depth_encoder = custom_resnet18(inplanes=1, planes=64)
         inplanes = self.img_encoder.num_ch_enc[-1] + self.depth_encoder.out_chans[-1]
         self.pooling = nn.AdaptiveMaxPool2d((1,1))
         self.mlp = MLPNet([inplanes] + mlp_head_dims, mlp_sub_dims + [3], activation_fn)
         self.buffer = dict()
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
+                nn.init.kaiming_normal_(m.weight.data, mode='fan_in')
+                if m.bias is not None:
+                    m.bias.data.zero_()
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight.data, 0.1)
 
     def forward(self, rgb:torch.Tensor, depth:torch.Tensor):
         if len(self.buffer.keys()) == 0:

@@ -535,6 +535,13 @@ class LCCRAFT(nn.Module):
         self.fps_num = fps_num
         self.loss_gamma = loss_gamma
         self.buffer = dict()
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
+                nn.init.kaiming_normal_(m.weight.data, mode='fan_in')
+                if m.bias is not None:
+                    m.bias.data.zero_()
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight.data, 0.1)
 
     def restore_buffer(self, img:torch.Tensor):
         img_fmap = self.img_feature_encoder(img)

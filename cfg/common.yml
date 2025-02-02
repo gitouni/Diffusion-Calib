@@ -9,22 +9,22 @@ path:
   pretrain: experiments/{dataset}/{mode}/{model}/checkpoint/best_model.pth
 
 loss:
-  type: mse
+  type: mae
   args:
     reduction: mean
 
 optimizer:
-  type: prodigy 
+  type: AdamW
   args:
+    lr: 1.0E-4
     betas: [0.9, 0.999]
-    weight_decay: 1.0E-2
-    decouple: true
   max_grad: 1.0
 
 scheduler:
-  type: cosine
+  type: poly
   args:
-    T_max: &n_epoch 30
+    total_iters: &n_epoch 30
+    power: 2.0
 
 run:
   n_epoch: *n_epoch

@@ -1,49 +1,9 @@
 import torch.nn as nn
 import torch
-from torchvision.models import (ResNet, resnet18, resnet34, resnet50, resnet101, resnet152,
-                ResNet18_Weights, ResNet34_Weights, ResNet50_Weights, ResNet101_Weights, ResNet152_Weights)
 from typing import Literal, Dict
 import numpy as np
 from ..Modules import resnet18 as custom_resnet18
-
-class ResnetEncoder(nn.Module):
-    """Pytorch module for a resnet encoder
-    """
-    def __init__(self, num_layers:Literal[18, 34, 50, 101, 152], pretrained:bool):
-        super().__init__()
-
-        self.num_ch_enc = np.array([64, 64, 128, 256, 512])
-
-        resnets = {18: (resnet18, ResNet18_Weights.DEFAULT),
-                   34: (resnet34, ResNet34_Weights.DEFAULT),
-                   50: (resnet50, ResNet50_Weights.DEFAULT),
-                   101: (resnet101, ResNet101_Weights.DEFAULT),
-                   152: (resnet152, ResNet152_Weights.DEFAULT)}
-
-        if num_layers not in resnets:
-            raise ValueError("{} is not a valid number of resnet layers".format(num_layers))
-
-        func, weights = resnets[num_layers]
-        if not pretrained:
-            weights = None
-        self.encoder:ResNet = func(weights=weights)
-
-        if num_layers > 34:
-            self.num_ch_enc[1:] *= 4
-
-    def forward(self, x:torch.Tensor):
-        features = []
-        x = self.encoder.conv1(x)
-        x = self.encoder.bn1(x)
-        features.append(self.encoder.relu(x))
-        # self.features.append(self.encoder.layer1(self.encoder.maxpool(self.features[-1])))
-        features.append(self.encoder.maxpool(features[-1]))
-        features.append(self.encoder.layer1(features[-1]))
-        features.append(self.encoder.layer2(features[-1]))
-        features.append(self.encoder.layer3(features[-1]))
-        features.append(self.encoder.layer4(features[-1]))
-        return features
-
+from ..tools.core import ResnetEncoder
 
 class Aggregation(nn.Module):
     def __init__(self,inplanes=768,planes=96,final_feat=(2,4),dropout=0.0):
@@ -92,9 +52,9 @@ class Aggregation(nn.Module):
         return x_rot, x_tr
 
 class CalibNet(nn.Module):
-    def __init__(self, res_num:Literal[18, 34, 50, 101, 152], depth_resnet_argv:Dict, aggregation_argv:Dict):
+    def __init__(self, resnet_argv:Dict, depth_resnet_argv:Dict, aggregation_argv:Dict):
         super(CalibNet,self).__init__()
-        self.rgb_resnet = ResnetEncoder(num_layers=res_num, pretrained=True)  # outplanes = 512
+        self.rgb_resnet = ResnetEncoder(**resnet_argv)  # outplanes = 512
         self.depth_resnet = custom_resnet18(**depth_resnet_argv)
         self.aggregation = Aggregation(inplanes=512+256, **aggregation_argv)
         self.buffer = dict()

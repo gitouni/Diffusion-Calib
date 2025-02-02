@@ -3,7 +3,10 @@ surrogate:
   type: CalibNet
   argv:
     calibnet_argv:
-      res_num: 18
+      resnet_argv:
+        num_layers: 18
+        pretrained: true
+        frozen: false
       depth_resnet_argv:
         inplanes: 1
         planes: 32

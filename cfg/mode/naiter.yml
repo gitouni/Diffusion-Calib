@@ -1,5 +1,5 @@
 name: naiter
 replace_args:
   - name: ['dataset','train','dataset','train','main']
-  - value:
+    value:
       mag_randomly: true
