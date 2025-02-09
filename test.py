@@ -165,7 +165,7 @@ def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:log
             camera_info = batch['camera_info']
             H0 = torch.eye(4).unsqueeze(0).to(gt_se3)
             model.restore_buffer(img, pcd)
-            x0_list = []
+            x0_list = [se3.log(init_extran)]
             with Timer() as timer:
                 for _ in range(iters):
                     delta_x = model.forward(img, pcd, H0 @ init_extran, camera_info)

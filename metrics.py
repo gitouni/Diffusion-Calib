@@ -5,7 +5,6 @@ from scipy.spatial.transform import Rotation
 import argparse
 from typing import Tuple
 from models.util.transform import inv_pose_np
-from pprint import pprint
 from collections import OrderedDict
 import json
 from pathlib import Path
@@ -29,7 +28,7 @@ if __name__ == "__main__":
     pred_dirs = sorted(os.listdir(args.pred_dir_root))
     assert len(gt_files) == len(pred_dirs), "number of gt files ({}) != number of pred subdirs ({})".format(len(gt_files), len(pred_dirs))
     names = pred_dirs
-    metrics = OrderedDict({"Rx":[], "Ry":[], "Rz":[], "tx":[], "ty":[], "tz":[],"R":[],"t":[],"3d3c":[],"5d5c":[]})
+    metrics = OrderedDict({"Rx":[], "Ry":[], "Rz":[], "tx":[], "ty":[], "tz":[],"R":[],"t":[],"3d3c":[],"5d5c":[],"10d10c":[]})
     print("Compute metrics on {}".format(names))
     metric_list = []
     log_path = os.path.dirname(args.log_file)
@@ -62,6 +61,7 @@ if __name__ == "__main__":
         dir_metric['t'] = np.mean(t_rmse)
         dir_metric['3d3c'] = np.sum(np.logical_and(R_rmse < 3, t_rmse < 0.03)) / len(R_rmse)
         dir_metric['5d5c'] = np.sum(np.logical_and(R_rmse < 5, t_rmse < 0.05)) / len(R_rmse)
+        dir_metric['10d10c'] = np.sum(np.logical_and(R_rmse < 10, t_rmse < 0.10)) / len(R_rmse)
         metric_list.append(dir_metric)
         for metric in metrics.keys():
             metrics[metric].append(dir_metric[metric])
