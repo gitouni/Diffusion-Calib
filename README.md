@@ -1,5 +1,5 @@
-# SurrogateCalib
-Official Implementation of Iterative Camera-Lidar Calibration via Surrogate Diffusion Models
+# Iterative Camera-Lidar Calibration via Surrogate Diffusion Model (IROS 2025)
+Official Implementation of Iterative Camera-Lidar Calibration via Surrogate Diffusion Models [[arxiv](https://arxiv.org/abs/2506.14706)]
 # Dependencies
 |Pytorch|CUDA|Python|
 |---|---|---|
@@ -156,11 +156,11 @@ python test.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/u
 ```bash
 python test.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/unipc_model/main.yml --model_type iterative --iters 10
 ```
-* Linear Surrogate Diffusion Model
+* Linear Surrogate Diffusion Model (Our method)
 ```bash
 python test.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/unipc_model/main.yml --model_type diffusion
 ```
-* Non-Linear Surrogate Diffusion Model
+* Non-Linear Surrogate Diffusion Model (Adapted from SE3-Diffusion [[github](https://github.com/Jiang-HB/DiffusionReg)])
 ```bash
 python test_se3_diff.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/unipc_model/main_sd.yml --model_type se3_diffusion
 ```

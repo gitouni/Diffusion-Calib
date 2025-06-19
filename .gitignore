@@ -20,6 +20,7 @@ models/tools/csrc/dist
 *.so
 *.a
 data/**
+models/colmap/
 models/tools/csrc/build/
 models/tools/csrc/csrc.egg-info/
 models/tools/csrc/*.so
