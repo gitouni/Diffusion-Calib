@@ -19,7 +19,8 @@ models/tools/csrc/dist
 *.pyc
 *.so
 *.a
-data/**
+data/
+data/** */
 models/colmap/
 models/tools/csrc/build/
 models/tools/csrc/csrc.egg-info/
