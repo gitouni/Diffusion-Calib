@@ -44,10 +44,10 @@ tmp_table.txt
 train_se3diff.py
 train_surrogate.py
 tmp/
-cal_time.py
 debug_dataset.py
 debug_model.py
 save_feat.py
 test_custom.py
 extract_gt.py
 view*.py
+fix_iter_res.py

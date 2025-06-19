@@ -10,7 +10,7 @@ parser.add_argument("--method_list",type=str,nargs="+",default=['calibnet','rggn
 parser.add_argument("--name_method_list",type=str,nargs="+",default=['CalibNet','RGGNet','LCCNet','LCCRAFT-S','LCCRAFT-L'])
 parser.add_argument("--name_suffix_list",type=str,nargs="+",default=[' (Single)',' + NaIter',' + NLSD',' + LSD'])
 parser.add_argument("--first_suffix",type=str,nargs="+",default=[r'~\cite{CalibNet}',r'~\cite{RGGNet}',r'~\cite{LCCNet}',r'~\cite{LCCRAFT}',''])
-parser.add_argument("--key_order",type=str,nargs="+",default=['Rx','Ry','Rz','R','tx','ty','tz','t','3d3c','5d5c'])
+parser.add_argument("--key_order",type=str,nargs="+",default=['3d3c','5d5c','decreasing_value'])
 parser.add_argument("--save_table",type=str,default="tmp_table.txt")
 args = parser.parse_args()
 first_format = "\\textbf{}"
@@ -31,7 +31,7 @@ with open(args.save_table,'w') as f:
                 if 't' in key:
                     value *= 100
                     values.append("{:.3f}".format(value))
-                elif key == '3d3c' or key == '5d5c':
+                elif key in ['3d3c','5d5c','decreasing_value']:
                     value *= 100
                     values.append("{:.2f}".format(value)+r'\%')
                 else:

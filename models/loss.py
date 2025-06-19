@@ -2,7 +2,6 @@ import torch.nn as nn
 import torch
 from typing import Literal, Tuple
 from functools import partial
-from .util import se3
 from .util.transform import inv_pose
 from .util.rotation_conversions import matrix_to_euler_angles
 
@@ -11,6 +10,14 @@ def se3_err(pred_se3:torch.Tensor, gt_se3:torch.Tensor) -> Tuple[torch.Tensor, t
     delta_euler = matrix_to_euler_angles(delta_se3[...,:3,:3], 'XYZ')
     delta_tsl = torch.abs(delta_se3[...,:3,3])
     return delta_euler, delta_tsl  # (B, 3), (B, 3)
+
+def se3_reduce(delta_euler:torch.Tensor, delta_tsl:torch.Tensor):
+    err = se3_rmse(delta_euler) + se3_rmse(delta_tsl)
+    return err  # (B,)
+
+def se3_rmse(delta:torch.Tensor):
+    return torch.sum(delta ** 2, dim=-1) ** 0.5
+
 
 def get_loss(loss_type:Literal['mae','smooth_mae','mse'], **argv):
     if loss_type == 'mae':
