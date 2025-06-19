@@ -1,5 +1,7 @@
 # Iterative Camera-Lidar Calibration via Surrogate Diffusion Model (IROS 2025)
-Official Implementation of Iterative Camera-Lidar Calibration via Surrogate Diffusion Models [[arxiv](https://arxiv.org/abs/2506.14706)]
+* Official Implementation of Iterative Camera-Lidar Calibration via Surrogate Diffusion Models [[arxiv](https://arxiv.org/abs/2506.14706)]
+
+![](./assets/abstract.png)
 # Dependencies
 |Pytorch|CUDA|Python|
 |---|---|---|
