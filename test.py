@@ -10,6 +10,7 @@ from dataset import __classdict__ as DatasetDict, DATASET_TYPE
 from models.denoiser import Denoiser, RAFTDenoiser, Surrogate, __classdict__ as DenoiserDict
 from models.diffuser import Diffuser
 from models.loss import se3_err, get_loss
+from models.util.constant import BatchedPerturbDatasetOutput
 from tqdm import tqdm
 import yaml
 from models.util import se3
@@ -17,11 +18,12 @@ from core.logger import LogTracker, fmt_time
 from core.tools import load_checkpoint_model_only
 import logging
 from pathlib import Path
-from typing import Dict, Literal, Union, List
+from typing import Dict, Literal, Iterable, List, Tuple, Generator
 from core.tools import Timer
+from copy import deepcopy
 
-
-def get_dataloader(test_dataset_argv:Union[List[Dict], Dict], test_dataloader_argv:Dict, dataset_type:str):
+def get_dataloader(test_dataset_argv:Iterable[Dict],
+        test_dataloader_argv:Dict, dataset_type:str) -> Tuple[List[str], List[Generator[BatchedPerturbDatasetOutput, None, None]]]:
     name_list = []
     dataloader_list = []
     data_class:DATASET_TYPE = DatasetDict[dataset_type]
@@ -38,7 +40,10 @@ def get_dataloader(test_dataset_argv:Union[List[Dict], Dict], test_dataloader_ar
         assert hasattr(data_class, 'split_dataset'), '{} must has the function \"split_dataset\"'.format(data_class.__class__.__name__)
         root_dataset:DATASET_TYPE = data_class(**test_dataset_argv['base'])
         for base_dataset, name in root_dataset.split_dataset():
-            dataset = PerturbDataset(base_dataset, **test_dataset_argv['main'])
+            main_args = deepcopy(test_dataset_argv['main'])
+            if 'file' in main_args:
+                main_args['file'] = main_args['file'].format(name=name)
+            dataset = PerturbDataset(base_dataset, **main_args)
             if hasattr(dataset, 'collate_fn'):
                 test_dataloader_argv['collate_fn'] = getattr(dataset, 'collate_fn')
             dataloader = DataLoader(dataset, **test_dataloader_argv)
@@ -165,7 +170,7 @@ def test_iterative(test_loader:DataLoader, name:str, model:Surrogate, logger:log
             camera_info = batch['camera_info']
             H0 = torch.eye(4).unsqueeze(0).to(gt_se3)
             model.restore_buffer(img, pcd)
-            x0_list = [se3.log(init_extran)]
+            x0_list = [to_npy(se3.log(init_extran))]
             with Timer() as timer:
                 for _ in range(iters):
                     delta_x = model.forward(img, pcd, H0 @ init_extran, camera_info)

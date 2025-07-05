@@ -56,8 +56,9 @@ if __name__ == "__main__":
         for i, pred_file in enumerate(pred_files):
             pred_se3_i = np.loadtxt(os.path.join(pred_dir, pred_file))
             if np.ndim(pred_se3_i) == 2:
-                err_s2, err_s5, err_s10 = map(partial(rmse_func, gt_se3=gt_se3), [pred_se3_i[2], pred_se3_i[5], pred_se3_i[10]])
-                decreasing[i] = (err_s10[0] <= err_s5[0] <= err_s2[0]) and (err_s10[1] <= err_s5[1] <= err_s2[1])
+                if len(pred_se3_i) >= 10:
+                    err_s2, err_s5, err_s10 = map(partial(rmse_func, gt_se3=gt_se3), [pred_se3_i[2], pred_se3_i[5], pred_se3_i[10]])
+                    decreasing[i] = (err_s10[0] <= err_s5[0] <= err_s2[0]) and (err_s10[1] <= err_s5[1] <= err_s2[1])
                 pred_se3_i = pred_se3_i[-1]  # sequences of prediction
             R_err_i, t_err_i = se3_err(toMatw(pred_se3_i), gt_se3)
             R_err[i, :] = R_err_i

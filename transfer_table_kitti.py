@@ -5,13 +5,13 @@ import json
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--src_dir",type=str,default="log/kitti")
-parser.add_argument("--suffix_list",type=str,nargs="+", default=['_sig','_iter','_nlsd','_lsd'])
-parser.add_argument("--method_list",type=str,nargs="+",default=['calibnet','rggnet','lccnet','lccraft_small','lccraft_large'])
-parser.add_argument("--name_method_list",type=str,nargs="+",default=['CalibNet','RGGNet','LCCNet','LCCRAFT-S','LCCRAFT-L'])
-parser.add_argument("--name_suffix_list",type=str,nargs="+",default=[' (Single)',' + NaIter',' + NLSD',' + LSD'])
+parser.add_argument("--suffix_list",type=str,nargs="+", default=['_lsd_naiter'])
+parser.add_argument("--method_list",type=str,nargs="+",default=['calibnet','rggnet','lccnet','lccraft_large'])
+parser.add_argument("--name_method_list",type=str,nargs="+",default=['CalibNet','RGGNet','LCCNet','LCCRAFT'])
+parser.add_argument("--name_suffix_list",type=str,nargs="+",default=[' + LSD (o)'])
 parser.add_argument("--first_suffix",type=str,nargs="+",default=[r'~\cite{CalibNet}',r'~\cite{RGGNet}',r'~\cite{LCCNet}',r'~\cite{LCCRAFT}',''])
 parser.add_argument("--key_order",type=str,nargs="+",default=['3d3c','5d5c','decreasing_value'])
-parser.add_argument("--save_table",type=str,default="tmp_table.txt")
+parser.add_argument("--save_table",type=str,default="tmp_table_kitti.txt")
 args = parser.parse_args()
 first_format = "\\textbf{}"
 second_format = "\\underline{}"

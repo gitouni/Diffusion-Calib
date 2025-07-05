@@ -1,11 +1,9 @@
 import os
 from pathlib import Path
-import shutil
 import numpy as np
 import argparse
 import torch
 import torch.nn as nn
-import torch.utils
 from torch.utils.data import DataLoader
 from dataset import __classdict__ as DatasetDict
 from dataset import PerturbDataset, SeqBatchSampler

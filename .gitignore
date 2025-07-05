@@ -50,5 +50,6 @@ debug_model.py
 save_feat.py
 test_custom.py
 extract_gt.py
-view*.py
 fix_iter_res.py
+bash_test_*.py
+bash_metric_*.py

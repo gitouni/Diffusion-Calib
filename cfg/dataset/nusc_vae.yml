@@ -60,7 +60,7 @@ dataset:
         <<: *dataset_common_args
       main:
         <<: *test_common_main
-        file: cache/nuscenes/{name}.txt
+        
 
     dataloader:
       batch_size: 16
