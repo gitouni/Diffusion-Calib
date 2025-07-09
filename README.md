@@ -135,36 +135,45 @@ sub_idx: 0
 ```
 # Train
 * You can download our [pretrained models](https://github.com/gitouni/SurrogateCalib/releases/download/1.0/LSD_chkpt.zip) trained on KITTI Odometry Dataset or train them following the instructions.
-* Train a surrogate model (dataset_config + model_config)
+* Train a single model (e.g. CalibNet) (dataset_config + model_config + mode_config)
 ```bash
-python train.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/unipc_model/main.yml
+python train.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/model/calibnet.yml --mode_config cfg/mode/naive.yml
 ```
-Change `main.yml` to other configs in `cfg/unipc_model` to train baselines, and the same applies to the following commands.
+* Change `cfg/model/calibnet.yml` to other configs in `cfg/model` to imeplement different calibration methods.
+* Train a surrogate model (e.g. CalibNet) (dataset_config + model_config + mode_config)
+```bash
+python train.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/model/calibnet.yml --mode_config cfg/mode/lsd.yml
+```
 * Train a vae for RGGNet (note that this should be run before training RGGNet)
 ```bash
 python train_vae.py --dataset_config cfg/dataset/kitti_vae_large.yml --model_config cfg/model/vae.yml
 ```
 * Train a multi-range model (dataset_config + model_config + multirange_config + stage)
 ```bash
-python train_mr.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/unipc_model/main.yml --multirange_config cfg/dataset/mr_5.yml --stage 0
+python train_mr.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/model/calibnet.yml --mode_config cfg/mode/lsd.yml cfg/mode/mr_3.yml --stage 0
 ```
 Note that a complete multirange model requires all stages of training. See [bash_train_mr.py](./bash_train_mr.py) as an example for automatic running.
 # Test
+Supported Modes:
 * one-step mode
-```bash
-python test.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/unipc_model/main.yml --model_type iterative --iters 1
-```
 * naive iterative method (NFE=10)
-```bash
-python test.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/unipc_model/main.yml --model_type iterative --iters 10
-```
 * Linear Surrogate Diffusion Model (Our method)
-```bash
-python test.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/unipc_model/main.yml --model_type diffusion
-```
 * Non-Linear Surrogate Diffusion Model (Adapted from SE3-Diffusion [[github](https://github.com/Jiang-HB/DiffusionReg)])
+* Multirange models
+
+Find the merged config in the `experiments/${base_dir}/${task_name}/` directory (generated during the training stage); for example, `experiments/nuscenes/lsd/calibnet/log/nuscenes_lsd_calibnet.yml`
+
+1. For one-step mode, naive iterative method and linear Surrogate Diffusion (LSD), use the following command:
 ```bash
-python test_se3_diff.py --dataset_config cfg/dataset/kitti_large.yml --model_config cfg/unipc_model/main_sd.yml --model_type se3_diffusion
+python test.py --config experiments/xxxxx
+```
+2. For Non-Linear Surrogate Diffusion Model:
+```bash
+python test_nlsd.py --config experiments/xxxxx
+```
+3. For multi-range models:
+```bash
+python test_mr.py --config experiments/xxxxx
 ```
 # Acknowledgements
 Thanks authors of [CamLiFLow](https://github.com/MCG-NJU/CamLiFlow), [DPM-Solver](https://github.com/LuChengTHU/dpm-solver), [UniPC](https://github.com/wl-zhao/UniPC), [SE3-Diffusion](https://github.com/Jiang-HB/DiffusionReg) and [Palette](https://github.com/Janspiry/Palette-Image-to-Image-Diffusion-Models)
