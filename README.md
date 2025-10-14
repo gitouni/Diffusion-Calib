@@ -1,6 +1,6 @@
 # Iterative Camera-Lidar Calibration via Surrogate Diffusion Model (IROS 2025)
 * Official Implementation of Iterative Camera-Lidar Calibration via Surrogate Diffusion Models [[arxiv](https://arxiv.org/abs/2506.14706)]
-
+* Include Unofficial Implementation of CalibNet、RGGNet、LCCNet、LCCRAFT in Pytorch 2.x, CUDA 11.7
 ![](./assets/abstract.png)
 # Comparison of iterative methods mentioned in our paper
 ![](./assets/comparison_4in1.gif)
