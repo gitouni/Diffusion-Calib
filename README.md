@@ -2,7 +2,7 @@
 * Official Implementation of Iterative Camera-Lidar Calibration via Surrogate Diffusion Models [[arxiv](https://arxiv.org/abs/2506.14706)]
 
 ![](./assets/abstract.png)
-# Comparison of four iterative methods mentioned in our paper
+# Comparison of iterative methods mentioned in our paper
 ![](./assets/comparison_4in1.gif)
 
 # Dependencies
