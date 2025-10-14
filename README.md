@@ -97,7 +97,7 @@ cd ..
 ```
 
 # Expected output
-After you set all the dataset, run `dataset.py`. You should get the following output:
+After you set all the dataset, run `dataset.py`. You will get the following output:
 ```
 Ground truth poses are not avaialble for sequence 16.
 Ground truth poses are not avaialble for sequence 17.
@@ -136,6 +136,7 @@ extran: torch.Size([4, 4])
 group_idx: 0
 sub_idx: 0
 ```
+Please note that the NuScenes dataset class has been optimized for faster loading.
 # Train
 * You can download our [pretrained models](https://github.com/gitouni/SurrogateCalib/releases/download/1.0/LSD_chkpt.zip) trained on KITTI Odometry Dataset or train them following the instructions.
 * Train a single model (e.g. CalibNet) (dataset_config + model_config + mode_config)
