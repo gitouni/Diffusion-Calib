@@ -2,6 +2,12 @@
 * Official Implementation of Iterative Camera-Lidar Calibration via Surrogate Diffusion Models [[arxiv](https://arxiv.org/abs/2506.14706)]
 
 ![](./assets/abstract.png)
+# TEASER
+|Naive Iteration|SE3-Diffusion|
+|:---:|:---:|
+|![](./assets/naiter.gif)|![](./assets/nlsd.gif)|
+|**LSD (Proposed)**|**Ground-Truth**|
+|![](./assets/lsd.gif)|![](./assets/gt_img.png)|
 # Dependencies
 |Pytorch|CUDA|Python|
 |---|---|---|
