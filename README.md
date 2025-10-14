@@ -2,32 +2,8 @@
 * Official Implementation of Iterative Camera-Lidar Calibration via Surrogate Diffusion Models [[arxiv](https://arxiv.org/abs/2506.14706)]
 
 ![](./assets/abstract.png)
-# TEASER
-
-<table>
-  <tr>
-    <td><img src="./assets/naiter.gif" onload="syncGIFs(this)"></td>
-    <td><img src="./assets/nlsd.gif" onload="syncGIFs(this)"></td>
-  </tr>
-  <tr>
-    <td><img src="./assets/lsd.gif" onload="syncGIFs(this)"></td>
-    <td><img src="./assets/gt_img.png" onload="syncGIFs(this)"></td>
-  </tr>
-</table>
-
-<script>
-let imgs = [];
-function syncGIFs(img) {
-  imgs.push(img);
-  if (imgs.length === 4) {
-    imgs.forEach(im => {
-      const src = im.src;
-      im.src = ''; // 强制重新加载
-      im.src = src;
-    });
-  }
-}
-</script>
+# Comparison of four iterative methods mentioned in our paper
+![](./assets/comparison_4in1.gif)
 
 # Dependencies
 |Pytorch|CUDA|Python|
