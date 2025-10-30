@@ -22,17 +22,12 @@ export TORCH_CUDA_ARCH_LIST="8.6"
 * Build csrc package for our method
 ```bash
 cd models/tools/csrc/
-python setup.py install
+python setup.py build_ext --inplace
 ```
-* Copy `.so` files into `models/tools/csrc/`. Note that the directory name in `build` may vary
-```bash
-cp build/lib.linux-x86_64-cpython-38/* .
-```
-Note: lib.linux-x86_64-cpython-38 can vary for other versions of cpython.
 * Build correlation_cuda package for LCCNet
 ```bash
 cd models/lccnet/correlation_package/
-python setup.py install
+python setup.py build_ext --inplace
 ```
 * Install pointnet2_ops
 ```bash
