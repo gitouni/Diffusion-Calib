@@ -178,7 +178,7 @@ class BaseKITTIDataset(Dataset):
         self.tensor_tran = lambda x:torch.from_numpy(x).to(torch.float32)
         self.img_tran = Tf.Compose([Tf.ToTensor(),
                                     Tf.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
-        self.pcd_tran = KITTIFilter(voxel_size, min_dist, skip_point)
+        self.pcd_tran = KITTIFilter(voxel_size, min_dist=min_dist, skip_point=skip_point)
         self.extend_ratio = extend_ratio
         
     def __len__(self):
@@ -508,7 +508,7 @@ class NuSceneDataset(Dataset):
         self.img_tran = Tf.Compose([
              Tf.ToTensor(),
              Tf.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
-        self.pcd_filter = KITTIFilter(voxel_size, min_dist, skip_point)
+        self.pcd_filter = KITTIFilter(voxel_size, min_dist=min_dist, skip_point=skip_point)
         self.tensor_tran = lambda x:torch.from_numpy(x).to(torch.float32)
         self.resample_tran = Resampler(pcd_sample_num)
         self.resize_size = resize_size
