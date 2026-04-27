@@ -1,6 +1,6 @@
-<h1 align="center">🚀 LSD</h1>
+<h1 align="center">🚀 LSD: Iterative Camera-Lidar Calibration via Surrogate Diffusion Model </h1>
 <p align="center">
-  <b>Iterative Camera-Lidar Calibration via Surrogate Diffusion Model (IROS 2025)</b>
+  <b>IROS 2025</b>
 </p>
 
 <p align="center">
@@ -198,3 +198,6 @@ python test_mr.py --config experiments/xxxxx
 ```
 # Acknowledgements
 Thanks authors of [CamLiFLow](https://github.com/MCG-NJU/CamLiFlow), [DPM-Solver](https://github.com/LuChengTHU/dpm-solver), [UniPC](https://github.com/wl-zhao/UniPC), [SE3-Diffusion](https://github.com/Jiang-HB/DiffusionReg) and [Palette](https://github.com/Janspiry/Palette-Image-to-Image-Diffusion-Models)
+
+# My other works:
+- [Native-Domain Cross-Attention for Camera-LiDAR Extrinsic Calibration Under Large Initial Perturbations (RA-L 2026)](https://github.com/gitouni/ProjFusion)
