@@ -17,8 +17,9 @@
 
 
 # TL;DR
-* Official Implementation of Iterative Camera-Lidar Calibration via Surrogate Diffusion Models
-* Include Unofficial Implementation of CalibNet、RGGNet、LCCNet、LCCRAFT in Pytorch 2.x, CUDA 11.7
+* This repo is the official Implementation of the paper "Iterative Camera-Lidar Calibration via Surrogate Diffusion Models".
+* This work proposes a versatile iterative framework based on surrogate diffusion for camera-lidar extrinsic calibration.
+* Unofficial Implementation of CalibNet、RGGNet、LCCNet、LCCRAFT in Pytorch 2.x, CUDA 11.7 is also provided as surrogate denoisers in our framework.
 ![](./assets/abstract.png)
 
 # Abstract
