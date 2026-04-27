@@ -1,7 +1,29 @@
-# Iterative Camera-Lidar Calibration via Surrogate Diffusion Model (IROS 2025)
-* Official Implementation of Iterative Camera-Lidar Calibration via Surrogate Diffusion Models [[arxiv](https://arxiv.org/abs/2506.14706)]
+<h1 align="center">🚀 LSD</h1>
+<p align="center">
+  <b>Iterative Camera-Lidar Calibration via Surrogate Diffusion Model (IROS 2025)</b>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/github/stars/gitouni/Diffusion-Calib?style=social" alt="GitHub Repo stars"/>
+  <img src="https://img.shields.io/github/forks/gitouni/Diffusion-Calib?style=social" alt="GitHub forks"/>
+  <img src="https://img.shields.io/github/last-commit/gitouni/Diffusion-Calib" alt="GitHub last commit"/>
+  <a href="https://ieeexplore.ieee.org/document/11247343">
+    <img src="https://img.shields.io/badge/IEEE-Published-blue.svg" alt="IEEE"/>
+  </a>
+  <a href="https://arxiv.org/abs/2506.14706">
+    <img src="https://img.shields.io/badge/arXiv-2506.14706-b31b1b.svg" alt="arXiv"/>
+  </a>
+</p>
+
+
+# TL;DR
+* Official Implementation of Iterative Camera-Lidar Calibration via Surrogate Diffusion Models
 * Include Unofficial Implementation of CalibNet、RGGNet、LCCNet、LCCRAFT in Pytorch 2.x, CUDA 11.7
 ![](./assets/abstract.png)
+
+# Abstract
+Cameras and LiDAR are essential sensors for autonomous vehicles. The fusion of camera and LiDAR data addresses the limitations of individual sensors but relies on precise extrinsic calibration. Recently, numerous end-to-end calibration methods have been proposed; however, most predict extrinsic parameters in a single step and lack iterative optimization capabilities. To address the increasing demand for higher accuracy, we propose a versatile iterative framework based on surrogate diffusion. This framework can enhance the performance of any calibration method without requiring architectural modifications. Specifically, the initial extrinsic parameters undergo iterative refinement through a denoising process, in which the original calibration method serves as a surrogate denoiser to estimate the final extrinsics at each step. For comparative analysis, we selected four state-of-the-art calibration methods as surrogate denoisers and compared the results of our diffusion process with those of two other iterative approaches. Extensive experiments demonstrate that when integrated with our diffusion model, all calibration methods achieve higher accuracy, improved robustness, and greater stability compared to other iterative techniques and their single-step counterparts.
+
 # Comparison of iterative methods mentioned in our paper
 ![](./assets/comparison_4in1.gif)
 
